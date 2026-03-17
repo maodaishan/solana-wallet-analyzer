@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solana Wallet Analyzer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 { color: #14F195; margin-bottom: 20px; }
+    h2 { color: #9945FF; margin: 20px 0 15px; font-size: 1.2rem; }
+    
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .tab {
+      padding: 10px 20px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      cursor: pointer;
+      color: #888;
+    }
+    .tab.active {
+      background: linear-gradient(90deg, #9945FF, #14F195);
+      color: #000;
+      border-color: transparent;
+    }
+    
+    .card {
+      background: #1a1a1a;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 1px solid #333;
+    }
+    
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+    .form-group label {
+      display: block;
+      color: #888;
+      font-size: 0.85rem;
+      margin-bottom: 5px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 10px;
+      background: #0f0f0f;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 1rem;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #9945FF;
+    }
+    
+    button {
+      background: linear-gradient(90deg, #9945FF, #14F195);
+      color: #000;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.danger { background: #f6465d; color: white; }
+    
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #333;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #9945FF, #14F195);
+      transition: width 0.3s;
+    }
+    
+    .stats {
+      display: flex;
+      gap: 30px;
+      margin: 15px 0;
+    }
+    .stat-item { color: #888; }
+    .stat-item span { color: #14F195; font-weight: bold; }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      padding: 12px 8px;
+      text-align: left;
+      border-bottom: 1px solid #222;
+    }
+    th {
+      color: #888;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    th:hover { color: #14F195; }
+    tr:hover { background: #222; }
+    .text-right { text-align: right; }
+    .text-green { color: #14F195; }
+    .text-purple { color: #9945FF; }
+    .text-blue { color: #3b82f6; }
+    .text-gray { color: #666; }
+    
+    .hidden { display: none; }
+    
+    #status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    #status-dot.idle { background: #666; }
+    #status-dot.running { background: #f0b90b; animation: pulse 1s infinite; }
+    #status-dot.complete { background: #14F195; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Solana Wallet Analyzer</h1>
+    
+    <div class="tabs">
+      <div class="tab active" data-tab="wallets">Wallets</div>
+      <div class="tab" data-tab="scanner">Scanner</div>
+      <div class="tab" data-tab="config">Config</div>
+    </div>
+    
+    <!-- Wallets Tab -->
+    <div id="tab-wallets">
+      <div class="card">
+        <h2>Filters</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Min Profit (SOL)</label>
+            <input type="number" id="filter-profit" value="0">
+          </div>
+          <div class="form-group">
+            <label>Min Winrate (%)</label>
+            <input type="number" id="filter-winrate" value="0">
+          </div>
+          <div class="form-group">
+            <label>Min Hold Time (min)</label>
+            <input type="number" id="filter-holdtime" value="0">
+          </div>
+          <div class="form-group">
+            <label>Min SOL Balance</label>
+            <input type="number" id="filter-balance" value="0">
+          </div>
+          <div class="form-group">
+            <label>Min Age (days)</label>
+            <input type="number" id="filter-age" value="0">
+          </div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="stats">
+          <div class="stat-item">Wallets: <span id="wallet-count">0</span></div>
+          <div class="stat-item">Total Profit: <span id="total-profit">0</span> SOL</div>
+          <div class="stat-item">Last Update: <span id="last-update">-</span></div>
+        </div>
+        
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Wallet</th>
+              <th class="text-right" data-sort="profit_7d">Profit 7d</th>
+              <th class="text-right" data-sort="winrate_7d">Winrate</th>
+              <th class="text-right" data-sort="avg_holding_time_min">Hold Time</th>
+              <th class="text-right" data-sort="sol_balance">SOL Bal</th>
+              <th class="text-right" data-sort="wallet_age_days">Age</th>
+              <th>Twitter</th>
+            </tr>
+          </thead>
+          <tbody id="wallet-table"></tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Scanner Tab -->
+    <div id="tab-scanner" class="hidden">
+      <div class="card">
+        <h2><span id="status-dot" class="idle"></span>Scanner Status</h2>
+        <div class="stats">
+          <div class="stat-item">Status: <span id="scan-status">Idle</span></div>
+          <div class="stat-item">Transactions: <span id="scan-txs">0</span></div>
+          <div class="stat-item">Traders: <span id="scan-traders">0</span></div>
+          <div class="stat-item">Profitable: <span id="scan-profitable">0</span></div>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="scan-progress" style="width: 0%"></div>
+        </div>
+        <div style="margin-top: 15px;">
+          <button id="btn-start">Start Scan</button>
+          <button id="btn-stop" class="danger" disabled>Stop Scan</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Config Tab -->
+    <div id="tab-config" class="hidden">
+      <div class="card">
+        <h2>API Configuration</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Helius API Key</label>
+            <input type="password" id="config-helius" placeholder="Enter your Helius API key">
+          </div>
+        </div>
+        
+        <h2>Scan Settings</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Days to Scan</label>
+            <input type="number" id="config-days" value="7">
+          </div>
+          <div class="form-group">
+            <label>Request Delay (ms)</label>
+            <input type="number" id="config-delay" value="40">
+          </div>
+        </div>
+        
+        <h2>Filter Settings</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Min Transactions</label>
+            <input type="number" id="config-mintxs" value="10">
+          </div>
+          <div class="form-group">
+            <label>Min Winrate</label>
+            <input type="number" id="config-minwinrate" value="0.4" step="0.1">
+          </div>
+          <div class="form-group">
+            <label>Min ROI</label>
+            <input type="number" id="config-minroi" value="0.5" step="0.1">
+          </div>
+          <div class="form-group">
+            <label>Min Profit (SOL)</label>
+            <input type="number" id="config-minprofit" value="10">
+          </div>
+        </div>
+        
+        <button id="btn-save-config" style="margin-top: 15px;">Save Configuration</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let wallets = [];
+    let sortBy = 'profit_7d';
+    let sortDesc = true;
+    
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        
+        document.querySelectorAll('[id^="tab-"]').forEach(t => t.classList.add('hidden'));
+        document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
+      });
+    });
+    
+    // Load wallets
+    async function loadWallets() {
+      try {
+        const res = await fetch('/api/wallets');
+        wallets = await res.json();
+        renderWallets();
+        
+        const status = await fetch('/api/status').then(r => r.json());
+        document.getElementById('last-update').textContent = 
+          status.lastUpdate ? new Date(status.lastUpdate).toLocaleString() : '-';
+      } catch (e) {
+        console.error('Failed to load wallets:', e);
+      }
+    }
+    
+    // Render wallet table
+    function renderWallets() {
+      const filters = {
+        profit: parseFloat(document.getElementById('filter-profit').value) || 0,
+        winrate: parseFloat(document.getElementById('filter-winrate').value) || 0,
+        holdtime: parseFloat(document.getElementById('filter-holdtime').value) || 0,
+        balance: parseFloat(document.getElementById('filter-balance').value) || 0,
+        age: parseFloat(document.getElementById('filter-age').value) || 0,
+      };
+      
+      let filtered = wallets.filter(w => 
+        (w.profit_7d || 0) >= filters.profit &&
+        ((w.winrate_7d || 0) * 100) >= filters.winrate &&
+        (w.avg_holding_time_min || 0) >= filters.holdtime &&
+        (w.sol_balance || 0) >= filters.balance &&
+        (w.wallet_age_days || 0) >= filters.age
+      );
+      
+      filtered.sort((a, b) => {
+        const mult = sortDesc ? -1 : 1;
+        return mult * ((a[sortBy] || 0) - (b[sortBy] || 0));
+      });
+      
+      document.getElementById('wallet-count').textContent = filtered.length;
+      document.getElementById('total-profit').textContent = 
+        filtered.reduce((s, w) => s + (w.profit_7d || 0), 0).toLocaleString(undefined, {maximumFractionDigits: 0});
+      
+      const tbody = document.getElementById('wallet-table');
+      tbody.innerHTML = filtered.map((w, i) => `
+        <tr>
+          <td class="text-gray">${i + 1}</td>
+          <td>
+            <a href="https://solscan.io/account/${w.wallet_address}" target="_blank" class="text-purple">
+              ${w.wallet_address.slice(0, 6)}...${w.wallet_address.slice(-4)}
+            </a>
+          </td>
+          <td class="text-right text-green">${(w.profit_7d || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+          <td class="text-right">${((w.winrate_7d || 0) * 100).toFixed(1)}%</td>
+          <td class="text-right">${w.avg_holding_time_min || 0} min</td>
+          <td class="text-right">${(w.sol_balance || 0).toFixed(2)}</td>
+          <td class="text-right">${w.wallet_age_days || 0}d</td>
+          <td>${w.twitter ? `<a href="https://twitter.com/${w.twitter}" target="_blank" class="text-blue">@${w.twitter}</a>` : ''}</td>
+        </tr>
+      `).join('');
+    }
+    
+    // Filter change listeners
+    document.querySelectorAll('[id^="filter-"]').forEach(input => {
+      input.addEventListener('input', renderWallets);
+    });
+    
+    // Sort headers
+    document.querySelectorAll('th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const field = th.dataset.sort;
+        if (sortBy === field) {
+          sortDesc = !sortDesc;
+        } else {
+          sortBy = field;
+          sortDesc = true;
+        }
+        renderWallets();
+      });
+    });
+    
+    // Load config
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const config = await res.json();
+        
+        if (config.heliusApiKey) {
+          document.getElementById('config-helius').placeholder = 'Key saved: ' + (config.heliusApiKeyMasked || '****');
+        }
+        document.getElementById('config-days').value = config.daysToScan || 7;
+        document.getElementById('config-delay').value = config.delayMs || 40;
+        document.getElementById('config-mintxs').value = config.minTxs || 10;
+        document.getElementById('config-minwinrate').value = config.minWinrate || 0.4;
+        document.getElementById('config-minroi').value = config.minRoi || 0.5;
+        document.getElementById('config-minprofit').value = config.minProfit || 10;
+      } catch (e) {
+        console.error('Failed to load config:', e);
+      }
+    }
+    
+    // Save config
+    document.getElementById('btn-save-config').addEventListener('click', async () => {
+      const heliusKey = document.getElementById('config-helius').value;
+      
+      const config = {
+        daysToScan: parseInt(document.getElementById('config-days').value),
+        delayMs: parseInt(document.getElementById('config-delay').value),
+        minTxs: parseInt(document.getElementById('config-mintxs').value),
+        minWinrate: parseFloat(document.getElementById('config-minwinrate').value),
+        minRoi: parseFloat(document.getElementById('config-minroi').value),
+        minProfit: parseFloat(document.getElementById('config-minprofit').value),
+      };
+      
+      if (heliusKey) {
+        config.heliusApiKey = heliusKey;
+      }
+      
+      try {
+        await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+        alert('Configuration saved!');
+        loadConfig();
+      } catch (e) {
+        alert('Failed to save config: ' + e.message);
+      }
+    });
+    
+    // Scanner controls
+    document.getElementById('btn-start').addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/scan/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+        }
+      } catch (e) {
+        alert('Failed to start scan: ' + e.message);
+      }
+    });
+    
+    document.getElementById('btn-stop').addEventListener('click', async () => {
+      try {
+        await fetch('/api/scan/stop', { method: 'POST' });
+      } catch (e) {
+        alert('Failed to stop scan: ' + e.message);
+      }
+    });
+    
+    // Poll progress
+    async function pollProgress() {
+      try {
+        const res = await fetch('/api/progress');
+        const progress = await res.json();
+        
+        const dot = document.getElementById('status-dot');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        
+        if (progress.isRunning) {
+          dot.className = 'running';
+          document.getElementById('scan-status').textContent = 'Running';
+          btnStart.disabled = true;
+          btnStop.disabled = false;
+        } else if (progress.data.status === 'complete') {
+          dot.className = 'complete';
+          document.getElementById('scan-status').textContent = 'Complete';
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+        } else {
+          dot.className = 'idle';
+          document.getElementById('scan-status').textContent = 'Idle';
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+        }
+        
+        document.getElementById('scan-txs').textContent = (progress.data.processed || 0).toLocaleString();
+        document.getElementById('scan-traders').textContent = (progress.data.traders || 0).toLocaleString();
+        document.getElementById('scan-profitable').textContent = (progress.data.profitable || 0).toLocaleString();
+        
+      } catch (e) {
+        console.error('Failed to poll progress:', e);
+      }
+    }
+    
+    // Init
+    loadWallets();
+    loadConfig();
+    pollProgress();
+    
+    // Poll every 5 seconds
+    setInterval(pollProgress, 5000);
+    setInterval(loadWallets, 30000);
+  </script>
+</body>
+</html>

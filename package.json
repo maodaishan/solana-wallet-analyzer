@@ -1,0 +1,14 @@
+{
+  "name": "solana-wallet-analyzer",
+  "version": "1.0.0",
+  "description": "Solana wallet analyzer for copy trading",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "scan": "node scripts/scan.js",
+    "update": "node scripts/update-data.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
