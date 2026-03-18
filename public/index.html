@@ -194,12 +194,13 @@
             <tr>
               <th>#</th>
               <th>Wallet</th>
-              <th class="text-right" data-sort="profit_7d">Profit 7d</th>
-              <th class="text-right" data-sort="winrate_7d">Winrate</th>
-              <th class="text-right" data-sort="avg_holding_time_min">Hold Time</th>
+              <th class="text-right" data-sort="pnl_sol">PnL (SOL)</th>
+              <th class="text-right" data-sort="roi_pct">ROI %</th>
+              <th class="text-right" data-sort="txs">Txs</th>
+              <th class="text-right" data-sort="winrate">Winrate</th>
+              <th class="text-right" data-sort="avg_hold_time_min">Hold Time</th>
               <th class="text-right" data-sort="sol_balance">SOL Bal</th>
               <th class="text-right" data-sort="wallet_age_days">Age</th>
-              <th>Twitter</th>
             </tr>
           </thead>
           <tbody id="wallet-table"></tbody>
@@ -331,7 +332,7 @@
       
       document.getElementById('wallet-count').textContent = filtered.length;
       document.getElementById('total-profit').textContent = 
-        filtered.reduce((s, w) => s + (w.profit_7d || 0), 0).toLocaleString(undefined, {maximumFractionDigits: 0});
+        filtered.reduce((s, w) => s + (w.pnl_sol || 0), 0).toLocaleString(undefined, {maximumFractionDigits: 2});
       
       const tbody = document.getElementById('wallet-table');
       tbody.innerHTML = filtered.map((w, i) => `
@@ -342,12 +343,13 @@
               ${w.wallet_address.slice(0, 6)}...${w.wallet_address.slice(-4)}
             </a>
           </td>
-          <td class="text-right text-green">${(w.profit_7d || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
-          <td class="text-right">${((w.winrate_7d || 0) * 100).toFixed(1)}%</td>
-          <td class="text-right">${w.avg_holding_time_min || 0} min</td>
+          <td class="text-right text-green">${(w.pnl_sol || 0).toFixed(2)}</td>
+          <td class="text-right">${(w.roi_pct || 0).toFixed(1)}%</td>
+          <td class="text-right">${w.txs || 0}</td>
+          <td class="text-right">${w.winrate > 0 ? w.winrate + '%' : '-'}</td>
+          <td class="text-right">${w.avg_hold_time_min > 0 ? w.avg_hold_time_min + ' min' : '-'}</td>
           <td class="text-right">${(w.sol_balance || 0).toFixed(2)}</td>
           <td class="text-right">${w.wallet_age_days || 0}d</td>
-          <td>${w.twitter ? `<a href="https://twitter.com/${w.twitter}" target="_blank" class="text-blue">@${w.twitter}</a>` : ''}</td>
         </tr>
       `).join('');
     }
