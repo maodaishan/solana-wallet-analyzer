@@ -230,8 +230,8 @@ app.post('/api/analyze/wallets', async (req, res) => {
     const userWalletsFile = path.join(DATA_DIR, 'user-wallets.json');
     fs.writeFileSync(userWalletsFile, JSON.stringify(walletList, null, 2));
     
-    // Start the analyzer with user wallets
-    scannerProcess = spawn('node', ['scripts/analyze-wallets.js'], {
+    // Start the enhanced analyzer with user wallets
+    scannerProcess = spawn('node', ['scripts/analyze-wallets-v2.js'], {
       cwd: __dirname,
       env: { ...process.env, HELIUS_API_KEY: config.heliusApiKey }
     });
