@@ -411,12 +411,12 @@
         if (config.heliusApiKey) {
           document.getElementById('config-helius').placeholder = 'Key saved: ' + (config.heliusApiKeyMasked || '****');
         }
-        document.getElementById('config-days').value = config.daysToScan || 7;
-        document.getElementById('config-delay').value = config.delayMs || 40;
-        document.getElementById('config-mintxs').value = config.minTxs || 10;
-        document.getElementById('config-minwinrate').value = config.minWinrate || 0.4;
-        document.getElementById('config-minroi').value = config.minRoi || 0.5;
-        document.getElementById('config-minprofit').value = config.minProfit || 10;
+        document.getElementById('config-days').value = config.daysToScan !== undefined ? config.daysToScan : 7;
+        document.getElementById('config-delay').value = config.delayMs !== undefined ? config.delayMs : 40;
+        document.getElementById('config-mintxs').value = config.minTxs !== undefined ? config.minTxs : 10;
+        document.getElementById('config-minwinrate').value = config.minWinrate !== undefined ? config.minWinrate : 0.4;
+        document.getElementById('config-minroi').value = config.minRoi !== undefined ? config.minRoi : 0.5;
+        document.getElementById('config-minprofit').value = config.minProfit !== undefined ? config.minProfit : 10;
       } catch (e) {
         console.error('Failed to load config:', e);
       }
@@ -427,12 +427,12 @@
       const heliusKey = document.getElementById('config-helius').value;
       
       const config = {
-        daysToScan: parseInt(document.getElementById('config-days').value),
-        delayMs: parseInt(document.getElementById('config-delay').value),
-        minTxs: parseInt(document.getElementById('config-mintxs').value),
-        minWinrate: parseFloat(document.getElementById('config-minwinrate').value),
-        minRoi: parseFloat(document.getElementById('config-minroi').value),
-        minProfit: parseFloat(document.getElementById('config-minprofit').value),
+        daysToScan: Math.max(1, parseInt(document.getElementById('config-days').value) || 7),
+        delayMs: Math.max(10, parseInt(document.getElementById('config-delay').value) || 40),
+        minTxs: Math.max(1, parseInt(document.getElementById('config-mintxs').value) || 10),
+        minWinrate: Math.max(0, parseFloat(document.getElementById('config-minwinrate').value) || 0.4),
+        minRoi: parseFloat(document.getElementById('config-minroi').value) || 0.5,
+        minProfit: Math.max(0, parseFloat(document.getElementById('config-minprofit').value) || 10),
       };
       
       if (heliusKey) {
