@@ -156,6 +156,108 @@ app.get('/api/status', (req, res) => {
   }
 });
 
+// API: Download wallets as comma-separated single line (for copy bots)
+app.get('/api/download/wallets', (req, res) => {
+  try {
+    if (!fs.existsSync(WALLETS_FILE)) {
+      return res.status(404).json({ error: 'No wallets found' });
+    }
+    
+    const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
+    const addresses = wallets.map(w => w.wallet_address).join(', ');
+    
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=wallets.csv');
+    res.send(addresses);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Download filtered wallets
+app.get('/api/download/filtered', (req, res) => {
+  try {
+    if (!fs.existsSync(WALLETS_FILE)) {
+      return res.status(404).json({ error: 'No wallets found' });
+    }
+    
+    const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
+    
+    // Apply filters from query params
+    const minProfit = parseFloat(req.query.minProfit) || 0;
+    const minWinrate = parseFloat(req.query.minWinrate) || 0;
+    const minHoldtime = parseFloat(req.query.minHoldtime) || 0;
+    const minBalance = parseFloat(req.query.minBalance) || 0;
+    const minAge = parseFloat(req.query.minAge) || 0;
+    
+    const filtered = wallets.filter(w => 
+      (w.pnl_sol || 0) >= minProfit &&
+      ((w.winrate || 0)) >= minWinrate &&
+      (w.avg_hold_time_min || 0) >= minHoldtime &&
+      (w.sol_balance || 0) >= minBalance &&
+      (w.wallet_age_days || 0) >= minAge
+    );
+    
+    const addresses = filtered.map(w => w.wallet_address).join(', ');
+    
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=wallets-filtered.csv');
+    res.send(addresses);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Analyze user's own wallet list
+app.post('/api/analyze/wallets', async (req, res) => {
+  try {
+    const { wallets: walletList } = req.body;
+    
+    if (!walletList || !Array.isArray(walletList) || walletList.length === 0) {
+      return res.status(400).json({ error: 'Please provide a list of wallet addresses' });
+    }
+    
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return res.status(400).json({ error: 'Please configure Helius API key first' });
+    }
+    
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (!config.heliusApiKey) {
+      return res.status(400).json({ error: 'Helius API key not configured' });
+    }
+    
+    // Save wallet list for the analyzer script
+    const userWalletsFile = path.join(DATA_DIR, 'user-wallets.json');
+    fs.writeFileSync(userWalletsFile, JSON.stringify(walletList, null, 2));
+    
+    // Start the analyzer with user wallets
+    scannerProcess = spawn('node', ['scripts/analyze-wallets.js'], {
+      cwd: __dirname,
+      env: { ...process.env, HELIUS_API_KEY: config.heliusApiKey }
+    });
+    
+    scannerProcess.stdout.on('data', (data) => {
+      console.log(`Analyzer: ${data}`);
+    });
+    
+    scannerProcess.stderr.on('data', (data) => {
+      console.error(`Analyzer error: ${data}`);
+    });
+    
+    scannerProcess.on('close', (code) => {
+      console.log(`Analyzer exited with code ${code}`);
+      scannerProcess = null;
+    });
+    
+    res.json({ 
+      success: true, 
+      message: `Analyzing ${walletList.length} wallets. Check progress in Scanner tab.` 
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Solana Wallet Analyzer running at http://0.0.0.0:${PORT}\n`);
 });
