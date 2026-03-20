@@ -216,11 +216,27 @@
     <div id="tab-scanner" class="hidden">
       <div class="card">
         <h2>Analyze Your Wallets</h2>
-        <p style="color: #888; margin-bottom: 15px;">Paste your wallet addresses (one per line, or comma-separated) to analyze them:</p>
-        <textarea id="user-wallets" rows="6" style="width: 100%; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; padding: 10px; font-family: monospace; resize: vertical;" placeholder="wallet1&#10;wallet2&#10;wallet3&#10;or: wallet1, wallet2, wallet3"></textarea>
-        <div style="margin-top: 10px;">
-          <button id="btn-analyze">Analyze These Wallets</button>
+        <p style="color: #888; margin-bottom: 15px;">Upload a CSV file or paste wallet addresses:</p>
+        
+        <div style="display: flex; gap: 20px; margin-bottom: 15px;">
+          <div style="flex: 1;">
+            <label style="display: block; color: #14F195; margin-bottom: 8px;">Option 1: Upload CSV</label>
+            <input type="file" id="wallet-file" accept=".csv,.txt" style="display: none;">
+            <button id="btn-upload" style="width: 100%;">📁 Choose CSV File</button>
+            <div id="file-info" style="color: #888; font-size: 0.85rem; margin-top: 5px;"></div>
+          </div>
+          <div style="flex: 1;">
+            <label style="display: block; color: #9945FF; margin-bottom: 8px;">Option 2: Paste</label>
+            <textarea id="user-wallets" rows="4" style="width: 100%; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; padding: 10px; font-family: monospace; resize: vertical; font-size: 0.85rem;" placeholder="wallet1, wallet2, wallet3..."></textarea>
+          </div>
         </div>
+        
+        <div id="wallet-preview" style="background: #0f0f0f; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-bottom: 15px; display: none;">
+          <div style="color: #888; font-size: 0.85rem;">Preview: <span id="preview-count" style="color: #14F195;">0</span> wallets detected</div>
+          <div id="preview-list" style="color: #666; font-size: 0.8rem; margin-top: 5px; max-height: 60px; overflow-y: auto;"></div>
+        </div>
+        
+        <button id="btn-analyze">🔍 Analyze Wallets</button>
       </div>
       
       <div class="card">
@@ -509,22 +525,75 @@
       window.location.href = '/api/download/filtered?' + params.toString();
     });
     
-    // Analyze user wallets
-    document.getElementById('btn-analyze').addEventListener('click', async () => {
-      const input = document.getElementById('user-wallets').value.trim();
-      if (!input) {
-        alert('Please paste some wallet addresses');
+    // File upload handling
+    let uploadedWallets = [];
+    
+    document.getElementById('btn-upload').addEventListener('click', () => {
+      document.getElementById('wallet-file').click();
+    });
+    
+    document.getElementById('wallet-file').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const content = event.target.result;
+        uploadedWallets = parseWallets(content);
+        
+        document.getElementById('file-info').textContent = `📄 ${file.name}`;
+        updatePreview(uploadedWallets);
+      };
+      reader.readAsText(file);
+    });
+    
+    // Parse wallets from text (handles comma, newline, space separated)
+    function parseWallets(text) {
+      return text
+        .split(/[\n,\s]+/)
+        .map(w => w.trim())
+        .filter(w => w.length >= 32 && w.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(w));
+    }
+    
+    // Update preview when pasting
+    document.getElementById('user-wallets').addEventListener('input', (e) => {
+      const wallets = parseWallets(e.target.value);
+      if (wallets.length > 0) {
+        uploadedWallets = []; // Clear file upload if pasting
+        document.getElementById('file-info').textContent = '';
+      }
+      updatePreview(wallets);
+    });
+    
+    function updatePreview(wallets) {
+      const preview = document.getElementById('wallet-preview');
+      const count = document.getElementById('preview-count');
+      const list = document.getElementById('preview-list');
+      
+      if (wallets.length === 0) {
+        preview.style.display = 'none';
         return;
       }
       
-      // Parse wallets (handle both newline and comma separated)
-      const wallets = input
-        .split(/[\n,]+/)
-        .map(w => w.trim())
-        .filter(w => w.length >= 32 && w.length <= 44);
+      preview.style.display = 'block';
+      count.textContent = wallets.length;
+      
+      const displayWallets = wallets.slice(0, 5);
+      list.textContent = displayWallets.map(w => w.slice(0, 8) + '...' + w.slice(-4)).join(', ');
+      if (wallets.length > 5) {
+        list.textContent += ` ... and ${wallets.length - 5} more`;
+      }
+    }
+    
+    // Analyze user wallets
+    document.getElementById('btn-analyze').addEventListener('click', async () => {
+      // Get wallets from file upload or text input
+      let wallets = uploadedWallets.length > 0 
+        ? uploadedWallets 
+        : parseWallets(document.getElementById('user-wallets').value);
       
       if (wallets.length === 0) {
-        alert('No valid wallet addresses found');
+        alert('Please upload a CSV file or paste wallet addresses');
         return;
       }
       
@@ -539,6 +608,11 @@
           alert(data.error);
         } else {
           alert(data.message);
+          // Clear inputs after successful submission
+          uploadedWallets = [];
+          document.getElementById('user-wallets').value = '';
+          document.getElementById('file-info').textContent = '';
+          document.getElementById('wallet-preview').style.display = 'none';
         }
       } catch (e) {
         alert('Failed to start analysis: ' + e.message);
