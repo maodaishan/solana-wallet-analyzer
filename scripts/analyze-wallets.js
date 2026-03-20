@@ -59,6 +59,11 @@ async function getWalletTransactions(wallet) {
   try {
     const url = `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${HELIUS_API_KEY}&limit=100`;
     const txs = await fetchJson(url);
+    // Helius returns array on success, object with error on failure
+    if (!Array.isArray(txs)) {
+      console.error(`API error for ${wallet}:`, txs.error || 'unknown');
+      return [];
+    }
     return txs;
   } catch (e) {
     console.error(`Failed to get txs for ${wallet}:`, e.message);
@@ -67,8 +72,8 @@ async function getWalletTransactions(wallet) {
 }
 
 function analyzeTransactions(txs, wallet) {
-  if (!txs || txs.length === 0) {
-    return { txs: 0, pnl_sol: 0, roi_pct: 0, winrate: 0, avg_hold_time_min: 0 };
+  if (!Array.isArray(txs) || txs.length === 0) {
+    return { txs: 0, pnl_sol: 0, roi_pct: 0, winrate: 0, avg_hold_time_min: 0, wallet_age_days: 0 };
   }
 
   let totalPnl = 0;
@@ -142,10 +147,10 @@ async function main() {
     
     try {
       const balance = await getWalletBalance(wallet);
-      await sleep(100);
+      await sleep(200);
       
       const txs = await getWalletTransactions(wallet);
-      await sleep(100);
+      await sleep(300);
       
       const analysis = analyzeTransactions(txs, wallet);
       
@@ -167,6 +172,17 @@ async function main() {
       
     } catch (e) {
       console.error(`Error analyzing ${wallet}:`, e.message);
+      // Still add wallet with empty data
+      results.push({
+        wallet_address: wallet,
+        sol_balance: 0,
+        txs: 0,
+        pnl_sol: 0,
+        roi_pct: 0,
+        winrate: 0,
+        avg_hold_time_min: 0,
+        wallet_age_days: 0
+      });
       processed++;
     }
   }
