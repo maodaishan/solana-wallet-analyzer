@@ -1,5 +1,5 @@
 /**
- * PumpFun On-Chain Scanner
+ * PumpFun On-Chain Scanner - Enhanced with Real-time Block Time Progress
  * Scans Solana blockchain for profitable traders
  */
 
@@ -30,6 +30,15 @@ const FILTERS = {
   minProfit: config.minProfit || 10,
 };
 
+// Time calculations
+const scanStartTime = Date.now();
+const targetStartTime = Date.now() - (DAYS_TO_SCAN * 24 * 60 * 60 * 1000); // X days ago
+const scanEndTime = Date.now();
+
+console.log(`🔍 PumpFun Scanner Started`);
+console.log(`📅 Scanning last ${DAYS_TO_SCAN} days`);
+console.log(`🕐 Target range: ${new Date(targetStartTime).toLocaleString()} → ${new Date(scanEndTime).toLocaleString()}`);
+
 // Helper
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -45,16 +54,12 @@ async function rpc(method, params) {
 }
 
 async function getSigs(before = null) {
-  const params = [PUMPFUN, { limit: 1000, ...(before && { before }) }];
+  const params = [PUMPFUN, { limit: 1000, ...(before ? { before: before } : {}) }];
   return await rpc('getSignaturesForAddress', params);
 }
 
-async function getTx(sig) {
-  return await rpc('getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }]);
-}
-
-function parseTx(tx) {
-  if (!tx || !tx.meta || tx.meta.err) return null;
+function extractTrade(tx) {
+  if (!tx.blockTime || tx.meta.err) return null;
   
   const signers = tx.transaction.message.accountKeys.filter(k => k.signer).map(k => k.pubkey);
   if (!signers.length) return null;
@@ -66,14 +71,49 @@ function parseTx(tx) {
 }
 
 function saveProgress(state) {
-  fs.writeFileSync(PROGRESS_FILE, JSON.stringify({
+  const now = Date.now();
+  const currentBlockTime = state.currentBlockTime || now;
+  const timeProgress = Math.max(0, Math.min(1, (scanEndTime - currentBlockTime * 1000) / (scanEndTime - targetStartTime)));
+  const timeProgressPercent = Math.round(timeProgress * 100);
+  
+  // Calculate ETA
+  const elapsedMs = now - state.scanStartRealTime;
+  const estimatedTotalMs = timeProgress > 0 ? elapsedMs / timeProgress : 0;
+  const remainingMs = estimatedTotalMs - elapsedMs;
+  const eta = remainingMs > 0 ? new Date(now + remainingMs).toISOString() : null;
+  
+  const progressData = {
+    // Existing fields
     processed: state.processed,
     traders: Object.keys(state.traders).length,
     profitable: Object.values(state.traders).filter(t => t.received > t.spent).length,
     startTime: state.startTime,
     lastUpdate: new Date().toISOString(),
-    status: state.status || 'running'
-  }, null, 2));
+    status: state.status || 'running',
+    
+    // Enhanced time tracking
+    currentBlockTime: currentBlockTime,
+    currentBlockTimeFormatted: new Date(currentBlockTime * 1000).toLocaleString(),
+    targetStartTime: Math.floor(targetStartTime / 1000),
+    targetStartTimeFormatted: new Date(targetStartTime).toLocaleString(),
+    scanEndTime: Math.floor(scanEndTime / 1000),
+    scanEndTimeFormatted: new Date(scanEndTime).toLocaleString(),
+    
+    // Progress metrics
+    timeProgress: timeProgress,
+    timeProgressPercent: timeProgressPercent,
+    estimatedTotalMs: estimatedTotalMs,
+    elapsedMs: elapsedMs,
+    remainingMs: Math.max(0, remainingMs),
+    eta: eta,
+    etaFormatted: eta ? new Date(eta).toLocaleString() : null,
+    
+    // Additional stats
+    avgTxsPerSecond: state.processed / (elapsedMs / 1000),
+    daysScanned: (scanEndTime - currentBlockTime * 1000) / (1000 * 60 * 60 * 24)
+  };
+  
+  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progressData, null, 2));
 }
 
 function saveCheckpoint(state) {
@@ -81,137 +121,162 @@ function saveCheckpoint(state) {
     lastSig: state.lastSig,
     processed: state.processed,
     traders: state.traders,
-    startTime: state.startTime
+    lastBlockTime: state.currentBlockTime,
+    timestamp: Date.now()
   }));
 }
 
-function loadCheckpoint() {
-  if (fs.existsSync(CHECKPOINT_FILE)) {
-    return JSON.parse(fs.readFileSync(CHECKPOINT_FILE, 'utf8'));
-  }
-  return null;
-}
-
-function filterAndSave(traders) {
-  const results = Object.entries(traders)
-    .map(([wallet, d]) => ({
-      wallet_address: wallet,
-      profit_7d: d.received - d.spent,
-      txs_7d: d.txs,
-      sol_spent: d.spent,
-      sol_received: d.received,
-      roi: d.spent > 0 ? (d.received - d.spent) / d.spent : 0,
-      winrate_7d: d.received > d.spent ? 0.6 : 0.3, // Estimated
-    }))
-    .filter(t => 
-      t.profit_7d > 0 && 
-      t.txs_7d >= FILTERS.minTxs &&
-      t.roi >= FILTERS.minRoi &&
-      t.profit_7d >= FILTERS.minProfit
-    )
-    .sort((a, b) => b.profit_7d - a.profit_7d);
-  
-  fs.writeFileSync(WALLETS_FILE, JSON.stringify(results, null, 2));
-  return results.length;
-}
-
 async function main() {
-  console.log('🔍 PumpFun Scanner Started');
-  console.log(`📅 Scanning last ${DAYS_TO_SCAN} days\n`);
-  
-  // Load or init state
-  let state = loadCheckpoint() || {
-    lastSig: null,
+  let state = {
     processed: 0,
     traders: {},
-    startTime: new Date().toISOString()
+    lastSig: null,
+    startTime: new Date().toISOString(),
+    scanStartRealTime: Date.now(),
+    status: 'scanning',
+    currentBlockTime: Math.floor(Date.now() / 1000) // Initialize with current time
   };
   
-  if (state.processed > 0) {
-    console.log(`📌 Resuming: ${state.processed} txs, ${Object.keys(state.traders).length} traders\n`);
-  }
-  
-  state.status = 'running';
-  saveProgress(state);
-  
-  const cutoff = Math.floor(Date.now() / 1000) - (DAYS_TO_SCAN * 86400);
-  let batch = 0;
-  
-  while (true) {
+  // Load checkpoint if exists
+  if (fs.existsSync(CHECKPOINT_FILE)) {
     try {
-      const sigs = await getSigs(state.lastSig);
-      if (!sigs.length) { 
-        console.log('No more signatures'); 
-        break; 
-      }
-      
-      batch++;
-      let batchTraders = 0;
-      
-      for (const s of sigs) {
-        if (s.blockTime && s.blockTime < cutoff) {
-          console.log(`\n✅ Reached cutoff.`);
-          state.status = 'complete';
-          saveProgress(state);
-          const count = filterAndSave(state.traders);
-          console.log(`💾 Saved ${count} filtered wallets`);
-          return;
-        }
-        
-        await delay(DELAY_MS);
-        
-        try {
-          const tx = await getTx(s.signature);
-          const parsed = parseTx(tx);
-          
-          if (parsed) {
-            if (!state.traders[parsed.trader]) {
-              state.traders[parsed.trader] = { spent: 0, received: 0, txs: 0 };
-              batchTraders++;
-            }
-            
-            state.traders[parsed.trader].txs++;
-            if (parsed.solChange < 0) {
-              state.traders[parsed.trader].spent += Math.abs(parsed.solChange);
-            } else {
-              state.traders[parsed.trader].received += parsed.solChange;
-            }
-          }
-          
-          state.processed++;
-        } catch (e) {
-          // Skip failed tx
-        }
-        
-        state.lastSig = s.signature;
-      }
-      
-      // Save checkpoint & progress
-      saveCheckpoint(state);
-      saveProgress(state);
-      
-      // Periodically save filtered results
-      if (batch % 10 === 0) {
-        filterAndSave(state.traders);
-      }
-      
-      const traderCount = Object.keys(state.traders).length;
-      const profitable = Object.values(state.traders).filter(t => t.received > t.spent).length;
-      console.log(`Batch ${batch}: ${state.processed} txs | ${traderCount} traders | ${profitable} profitable`);
-      
+      const checkpoint = JSON.parse(fs.readFileSync(CHECKPOINT_FILE, 'utf8'));
+      console.log(`📌 Resuming: ${checkpoint.processed} txs, ${Object.keys(checkpoint.traders).length} traders`);
+      state = { ...state, ...checkpoint, scanStartRealTime: Date.now() - (checkpoint.timestamp || 0) };
     } catch (e) {
-      console.error('Batch error:', e.message);
-      await delay(5000);
+      console.log('❌ Failed to load checkpoint, starting fresh');
     }
   }
   
-  state.status = 'complete';
-  saveProgress(state);
-  const count = filterAndSave(state.traders);
-  console.log(`\n✅ Done! Saved ${count} filtered wallets`);
+  try {
+    while (true) {
+      const sigs = await getSigs(state.lastSig);
+      if (!sigs.length) break;
+      
+      console.log(`📡 Processing batch: ${sigs.length} signatures`);
+      
+      // Process in chunks to avoid memory issues
+      const CHUNK_SIZE = 100;
+      for (let i = 0; i < sigs.length; i += CHUNK_SIZE) {
+        const chunk = sigs.slice(i, i + CHUNK_SIZE);
+        
+        try {
+const txPromises = chunk.map(sig => rpc("getTransaction", [sig.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]));          const txs = await Promise.all(txPromises);
+          
+          for (const tx of txs) {
+            if (!tx) continue;
+            
+            // Update current block time for progress tracking
+            if (tx.blockTime) {
+              state.currentBlockTime = tx.blockTime;
+            }
+            
+            // Check if we've reached our time limit
+            if (tx.blockTime && tx.blockTime < targetStartTime / 1000) {
+              console.log(`⏰ Reached time limit: ${new Date(tx.blockTime * 1000).toLocaleString()}`);
+              state.status = 'completed';
+              saveProgress(state);
+              return await finalize(state);
+            }
+            
+            const trade = extractTrade(tx);
+            if (!trade) continue;
+            
+            const trader = trade.trader;
+            if (!state.traders[trader]) {
+              state.traders[trader] = { spent: 0, received: 0, txs: 0 };
+            }
+            
+            if (trade.solChange < 0) {
+              state.traders[trader].spent += Math.abs(trade.solChange);
+            } else {
+              state.traders[trader].received += trade.solChange;
+            }
+            state.traders[trader].txs++;
+            
+            state.processed++;
+            
+            // Save progress every 100 transactions
+            if (state.processed % 100 === 0) {
+              saveProgress(state);
+              saveCheckpoint(state);
+            }
+          }
+          
+        } catch (e) {
+          console.error(`❌ Batch processing error:`, e.message);
+          await delay(DELAY_MS * 2); // Double delay on error
+        }
+        
+        await delay(DELAY_MS);
+      }
+      
+      state.lastSig = sigs[sigs.length - 1].signature;
+      
+      // Update progress more frequently during scanning
+      saveProgress(state);
+      
+      // Break if last transaction is older than our target
+      const lastBlockTime = sigs[sigs.length - 1].blockTime;
+      if (lastBlockTime && lastBlockTime < targetStartTime / 1000) {
+        console.log(`⏰ Reached time limit: ${new Date(lastBlockTime * 1000).toLocaleString()}`);
+        break;
+      }
+    }
+    
+    state.status = 'completed';
+    saveProgress(state);
+    return await finalize(state);
+    
+  } catch (error) {
+    console.error('❌ Scanner error:', error);
+    state.status = 'error';
+    state.error = error.message;
+    saveProgress(state);
+    throw error;
+  }
 }
 
-main().catch(e => {
-  console.error('Fatal error:', e);
-  process.exit(1);
-});
+async function finalize(state) {
+  console.log('\n🔍 Analysis phase starting...');
+  state.status = 'analyzing';
+  saveProgress(state);
+  
+  const validTraders = Object.entries(state.traders).filter(([_, data]) => {
+    const profit = data.received - data.spent;
+    const roi = data.spent > 0 ? profit / data.spent : 0;
+    const winrate = data.txs > 0 ? (data.received > 0 ? 1 : 0) : 0; // Simplified
+    
+    return (
+      data.txs >= FILTERS.minTxs &&
+      roi >= FILTERS.minRoi &&
+      winrate >= FILTERS.minWinrate &&
+      profit >= FILTERS.minProfit
+    );
+  });
+  
+  const results = validTraders.map(([address, data]) => ({
+    address,
+    totalTxs: data.txs,
+    totalSpent: data.spent,
+    totalReceived: data.received,
+    totalProfit: data.received - data.spent,
+    roi: data.spent > 0 ? (data.received - data.spent) / data.spent : 0,
+    winrate: data.txs > 0 ? (data.received > 0 ? 1 : 0) : 0, // Simplified
+    avgHoldDays: 1, // Placeholder
+    balance: 0 // Placeholder
+  }));
+  
+  console.log(`✅ Analysis complete: ${results.length} profitable wallets found`);
+  
+  fs.writeFileSync(WALLETS_FILE, JSON.stringify(results, null, 2));
+  
+  // Final progress update
+  state.status = 'complete';
+  saveProgress(state);
+  
+  return results;
+}
+
+// Start scanner
+main().catch(console.error);
