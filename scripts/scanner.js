@@ -18,13 +18,11 @@ const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
 
 const HELIUS_KEY = config.heliusApiKey;
 const RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
-const BATCH_URL = `https://api.helius.xyz/v0/transactions?api-key=${HELIUS_KEY}`;
 const PUMPFUN = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const DAYS_TO_SCAN = config.daysToScan || 7;
 const DELAY_MS = config.delayMs || 40;
-const TARGET_RPS = config.targetRps || 45; // batch API calls per second
-const CHUNK_SIZE = config.chunkSize || 10; // concurrent batch calls
-const BATCH_SIZE = 100; // signatures per batch API call
+const TARGET_RPS = config.targetRps || 45; // RPC calls per second
+const CHUNK_SIZE = config.chunkSize || 10; // concurrent RPC calls
 
 // Filters
 const FILTERS = {
@@ -79,42 +77,20 @@ async function getSigs(before = null) {
   return await rpc('getSignaturesForAddress', params);
 }
 
-async function getTransactionsBatch(signatures, retries = 5) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(BATCH_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactions: signatures }),
-      });
-      const data = await res.json();
-      if (!Array.isArray(data)) {
-        const msg = data.error || JSON.stringify(data);
-        if (msg.includes('rate')) {
-          await delay(2000);
-          continue;
-        }
-        throw new Error(msg);
-      }
-      return data;
-    } catch (e) {
-      if (attempt === retries) throw e;
-      const waitMs = attempt * 2000;
-      console.log(`🔄 Batch error (attempt ${attempt}/${retries}), retrying in ${waitMs}ms: ${e.message}`);
-      await delay(waitMs);
-    }
-  }
+async function getTx(sig) {
+  return await rpc('getTransaction', [sig, { maxSupportedTransactionVersion: 0 }]);
 }
 
 function extractTrade(tx) {
-  // Helius enhanced transaction format
-  if (!tx.timestamp || tx.transactionError) return null;
-  const trader = tx.feePayer;
+  if (!tx || !tx.blockTime || tx.meta?.err) return null;
+  const keys = tx.transaction.message.accountKeys;
+  const signers = Array.isArray(keys)
+    ? keys.filter(k => (typeof k === 'object' ? k.signer : false)).map(k => k.pubkey || k)
+    : [];
+  const trader = signers[0] || (Array.isArray(keys) ? (keys[0]?.pubkey || keys[0]) : null);
   if (!trader) return null;
-  const accountData = tx.accountData || [];
-  const feePayerData = accountData.find(a => a.account === trader);
-  const solChange = feePayerData ? feePayerData.nativeBalanceChange / 1e9 : 0;
-  return { trader, solChange, blockTime: tx.timestamp };
+  const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
+  return { trader, solChange, blockTime: tx.blockTime };
 }
 
 function saveProgress(state) {
@@ -205,28 +181,22 @@ async function main() {
       const sigs = await getSigs(state.lastSig);
       if (!sigs.length) break;
       
-      // Split 1000 sigs into batches of BATCH_SIZE (100), then process CHUNK_SIZE batches concurrently
-      const sigGroups = [];
-      for (let i = 0; i < sigs.length; i += BATCH_SIZE) {
-        sigGroups.push(sigs.slice(i, i + BATCH_SIZE).map(s => s.signature));
-      }
+      console.log(`📡 Processing ${sigs.length} signatures`);
 
-      console.log(`📡 Processing ${sigs.length} signatures in ${sigGroups.length} batches`);
-
-      for (let i = 0; i < sigGroups.length; i += CHUNK_SIZE) {
-        const concurrentGroups = sigGroups.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < sigs.length; i += CHUNK_SIZE) {
+        const chunk = sigs.slice(i, i + CHUNK_SIZE);
         const chunkStart = Date.now();
 
         try {
-          const allTxs = (await Promise.all(concurrentGroups.map(g => getTransactionsBatch(g)))).flat();
+          const txs = await Promise.all(chunk.map(s => getTx(s.signature)));
 
-          for (const tx of allTxs) {
+          for (const tx of txs) {
             if (!tx) continue;
 
-            if (tx.timestamp) state.currentBlockTime = tx.timestamp;
+            if (tx.blockTime) state.currentBlockTime = tx.blockTime;
 
-            if (tx.timestamp && tx.timestamp < targetStartTime / 1000) {
-              console.log(`⏰ Reached time limit: ${new Date(tx.timestamp * 1000).toLocaleString()}`);
+            if (tx.blockTime && tx.blockTime < targetStartTime / 1000) {
+              console.log(`⏰ Reached time limit: ${new Date(tx.blockTime * 1000).toLocaleString()}`);
               state.status = 'completed';
               saveProgress(state);
               return await finalize(state);
@@ -244,7 +214,6 @@ async function main() {
             } else {
               state.traders[trader].received += trade.solChange;
             }
-            // Track earliest known transaction (scanning backwards, so update if older)
             if (trade.blockTime && trade.blockTime < state.traders[trader].firstSeen) {
               state.traders[trader].firstSeen = trade.blockTime;
             }
@@ -257,13 +226,13 @@ async function main() {
             }
           }
         } catch (e) {
-          console.error(`❌ Batch processing error:`, e.message);
+          console.error(`❌ Chunk processing error:`, e.message);
           await delay(1000);
         }
 
-        // Adaptive delay to stay at TARGET_RPS (batch API calls per second)
+        // Adaptive delay to stay at TARGET_RPS (RPC calls per second)
         const elapsed = Date.now() - chunkStart;
-        const targetMs = Math.floor(concurrentGroups.length / TARGET_RPS * 1000);
+        const targetMs = Math.floor(chunk.length / TARGET_RPS * 1000);
         const waitMs = Math.max(0, targetMs - elapsed);
         if (waitMs > 0) await delay(waitMs);
       }
