@@ -261,11 +261,11 @@
               <h3 style="margin: 0; color: #9945FF;">Mode 2: Blockchain Discovery</h3>
             </div>
             <p style="color: #888; margin-bottom: 15px; line-height: 1.5;">
-              Scan past 10 days of DEX transactions to discover and analyze 
+              Scan past <span id="mode2-scan-days">--</span> days of DEX transactions to discover and analyze
               all profitable wallets automatically.
             </p>
             <div style="color: #666; font-size: 0.85rem;">
-              ✓ Scan 10 days of transactions<br>
+              ✓ Scan <span id="mode2-scan-days-2">--</span> days of transactions<br>
               ✓ Discover thousands of wallets<br>
               ✓ Filter by profitability<br>
               ⏱️ Comprehensive (~1-2 hours)
@@ -409,34 +409,67 @@
     <div id="tab-config" class="tab-content">
       <div class="card">
         <h2>⚙️ Configuration</h2>
-<div style="margin-bottom: 25px;">          <div style="background: linear-gradient(135deg, #14F19515, #9945FF15); border: 1px solid #14F19530; border-radius: 8px; padding: 15px;">            <label style="display: block; margin-bottom: 8px; color: #14F195; font-weight: 500;">🔑 Helius API Key</label>            <input type="text" id="config-api-key" placeholder="Your Helius API Key (required)" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">            <div style="color: #888; font-size: 0.85rem; margin-top: 5px;">💡 Get your API key from <a href="https://helius.xyz" target="_blank" style="color: #14F195;">helius.xyz</a></div>          </div>        </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+
+        <!-- API Key -->
+        <div style="margin-bottom: 25px;">
+          <div style="background: linear-gradient(135deg, #14F19515, #9945FF15); border: 1px solid #14F19530; border-radius: 8px; padding: 15px;">
+            <label style="display: block; margin-bottom: 8px; color: #14F195; font-weight: 500;">🔑 Helius API Key</label>
+            <input type="text" id="config-api-key" placeholder="Your Helius API Key (required)" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">
+            <div style="color: #888; font-size: 0.85rem; margin-top: 5px;">💡 Get your API key from <a href="https://helius.xyz" target="_blank" style="color: #14F195;">helius.xyz</a></div>
+          </div>
+        </div>
+
+        <!-- Scan Settings -->
+        <h3 style="color: #9945FF; margin-bottom: 15px; font-size: 1.1rem;">🔍 Scan Settings</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px;">
           <div>
             <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Days to Scan</label>
             <input type="number" id="config-days" min="1" max="90" value="30" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">How many days back to scan PumpFun</div>
           </div>
           <div>
-            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Request Delay (ms)</label>
-            <input type="number" id="config-delay" min="5" max="1000" value="15" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Target Requests/sec</label>
+            <input type="number" id="config-target-rps" min="1" max="100" value="45" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Helius free: 10, paid: 45–100</div>
           </div>
+          <div>
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Concurrent Batches</label>
+            <input type="number" id="config-chunk-size" min="1" max="50" value="10" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Parallel batch calls (each batch = 100 txs)</div>
+          </div>
+        </div>
+
+        <!-- Filter Settings -->
+        <h3 style="color: #9945FF; margin-bottom: 15px; font-size: 1.1rem;">🎯 Wallet Filters</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px;">
           <div>
             <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Transactions</label>
-            <input type="number" id="config-min-txs" min="1" max="1000" value="20" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <input type="number" id="config-min-txs" min="1" max="1000" value="10" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Minimum PumpFun transactions</div>
           </div>
           <div>
-            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Winrate</label>
-            <input type="number" id="config-min-winrate" min="0" max="1" step="0.1" value="0.4" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Winrate (0–1)</label>
+            <input type="number" id="config-min-winrate" min="0" max="1" step="0.05" value="0.4" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">e.g. 0.4 = 40% win rate</div>
           </div>
           <div>
-            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min ROI</label>
-            <input type="number" id="config-min-roi" min="0" max="100" step="0.1" value="2.0" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min ROI (ratio)</label>
+            <input type="number" id="config-min-roi" min="0" max="100" step="0.1" value="0.5" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">e.g. 0.5 = 50% return on investment</div>
           </div>
           <div>
-            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Profit ($)</label>
-<input type="number" id="config-min-profit" min="1" max="10000" value="10" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">          </div>          <div>            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Wallet Age (days)</label>            <input type="number" id="config-min-age" min="0" max="365" value="1" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
-        
-        <div style="text-align: center; margin-top: 20px;">
-<div style="margin: 25px 0;">          <h3 style="color: #9945FF; margin-bottom: 15px; font-size: 1.1rem;">💾 Output Settings</h3>          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">            <div>              <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Export Format</label>              <select id="config-export-format" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">                <option value="csv">📄 CSV</option>                <option value="json">📋 JSON</option>              </select>            </div>            <div>              <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Sort Results By</label>              <select id="config-sort-by" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">                <option value="roi">📈 ROI (Return on Investment)</option>                <option value="profit">💰 Total Profit</option>                <option value="winrate">🎯 Win Rate</option>                <option value="transactions">📊 Transaction Count</option>              </select>            </div>          </div>        </div>
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Profit (SOL)</label>
+            <input type="number" id="config-min-profit" min="0" step="0.1" value="10" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Minimum net profit in SOL</div>
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Min Wallet Age (days)</label>
+            <input type="number" id="config-min-age" min="0" max="3650" value="0" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Based on first observed PumpFun tx (0 = no filter)</div>
+          </div>
+        </div>
+
+        <div style="text-align: center;">
           <button onclick="saveConfig()">💾 Save Configuration</button>
         </div>
       </div>
@@ -627,6 +660,10 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
           if (el) el.textContent = days + " days";
           const elStatus = document.getElementById("display-scan-days-status");
           if (elStatus) elStatus.textContent = days + " days";
+          const m1 = document.getElementById("mode2-scan-days");
+          if (m1) m1.textContent = days;
+          const m2 = document.getElementById("mode2-scan-days-2");
+          if (m2) m2.textContent = days;
           const elRoi = document.getElementById("display-min-roi-status");
           if (elRoi) elRoi.textContent = minRoi + '+';
         })
@@ -669,7 +706,115 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
     }
 
 // Enhanced Progress Display with Real-time Block Time
-    function updateProgressDisplay(progressData) {      const display = document.getElementById("progress-display");      const { isRunning, data } = progressData;            if (!isRunning && (data.status === "complete" || data.status === "completed")) {        display.innerHTML = `          <div style="text-align: center; padding: 40px;">            <div style="font-size: 48px; margin-bottom: 15px;">✅</div>            <div style="color: #14F195; font-size: 18px; margin-bottom: 10px;">Analysis Complete!</div>            <div style="color: #888; margin-bottom: 15px;">Found ${data.profitable || 0} profitable wallets</div>            <div style="color: #666; font-size: 0.9rem;">              Scanned ${(data.daysScanned || 0).toFixed(1)} days of blockchain data            </div>          </div>        `;                document.getElementById("btn-new-analysis").classList.remove("hidden");        document.getElementById("btn-stop-analysis").style.display = "none";        loadWallets();              } else if (isRunning || data.status === "running" || data.status === "scanning" || data.status === "analyzing") {        const processed = data.processed || 0;        const traders = data.traders || 0;        const profitable = data.profitable || 0;                const currentBlockTime = data.currentBlockTimeFormatted || "Unknown";        const targetStartTime = data.targetStartTimeFormatted || "Unknown";        const timeProgress = data.timeProgressPercent || 0;        const eta = data.etaFormatted || "Calculating...";        const elapsedMs = data.elapsedMs || 0;        const remainingMs = data.remainingMs || 0;                const formatDuration = (ms) => {          const hours = Math.floor(ms / (1000 * 60 * 60));          const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));          const seconds = Math.floor((ms % (1000 * 60)) / 1000);          if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;          if (minutes > 0) return `${minutes}m ${seconds}s`;          return `${seconds}s`;        };                const elapsedFormatted = formatDuration(elapsedMs);        const remainingFormatted = remainingMs > 0 ? formatDuration(remainingMs) : "Unknown";                let timeProgressBar = "";        if (timeProgress > 0) {          timeProgressBar = `            <div style="margin-bottom: 20px;">              <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.85rem;">                <span style="color: #9945FF;">Time Progress</span>                <span style="color: #14F195;">${timeProgress}%</span>              </div>              <div style="background: #333; border-radius: 10px; overflow: hidden; height: 12px;">                <div style="background: linear-gradient(90deg, #9945FF, #14F195); height: 100%; width: ${timeProgress}%; transition: width 0.3s;"></div>              </div>            </div>          `;        }                let statusInfo = "";        if (data.status === "scanning") {          statusInfo = `            <div style="background: #0f0f0f; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;">              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 0.9rem;">                <div style="text-align: center;">                  <div style="color: #9945FF; font-weight: 500; margin-bottom: 5px;">🕐 Current Block Time</div>                  <div style="color: #14F195; font-family: monospace; font-size: 0.85rem; line-height: 1.3;">                    ${currentBlockTime}                  </div>                </div>                <div style="text-align: center;">                  <div style="color: #9945FF; font-weight: 500; margin-bottom: 5px;">⏳ Remaining</div>                  <div style="color: #ffa500;">${remainingFormatted}</div>                </div>              </div>            </div>          `;        } else if (data.status === "analyzing") {          statusInfo = `            <div style="background: linear-gradient(135deg, #14F19515, #9945FF15); border: 1px solid #14F19530; border-radius: 8px; padding: 15px; margin-bottom: 20px; text-align: center;">              <div style="color: #14F195; font-weight: 500; margin-bottom: 5px;">🔍 Analyzing Discovered Wallets</div>              <div style="color: #888; font-size: 0.9rem;">                Filtering ${traders} traders by profitability criteria...              </div>            </div>          `;        }                display.innerHTML = `          <div style="text-align: center; padding: 20px;">            <div style="font-size: 36px; margin-bottom: 15px;">              ${data.status === "analyzing" ? "🔍" : "⏳"}            </div>            <div style="color: #14F195; font-size: 16px; margin-bottom: 20px; text-transform: capitalize;">              ${data.status || "Processing"}${data.status === "scanning" ? " Blockchain" : ""}            </div>                        ${timeProgressBar}            ${statusInfo}                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; max-width: 500px; margin: 0 auto;">              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333;">                <div style="color: #9945FF; font-weight: 500; font-size: 0.85rem;">Transactions</div>                <div style="font-size: 20px; color: #14F195;">${processed.toLocaleString()}</div>              </div>              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333;">                <div style="color: #9945FF; font-weight: 500; font-size: 0.85rem;">Traders</div>                <div style="font-size: 20px; color: #14F195;">${traders.toLocaleString()}</div>              </div>              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333;">                <div style="color: #9945FF; font-weight: 500; font-size: 0.85rem;">Profitable</div>                <div style="font-size: 20px; color: #14F195;">${profitable}</div>              </div>            </div>                        ${timeProgress > 0 && eta !== "Calculating..." ? `              <div style="margin-top: 20px; padding: 10px; background: #1a1a1a; border-radius: 6px; font-size: 0.85rem;">                <span style="color: #888;">Estimated completion:</span>                <span style="color: #ffa500; margin-left: 8px;">${eta}</span>              </div>            ` : ""}          </div>        `;      }    }
+    function updateProgressDisplay(progressData) {
+      const display = document.getElementById("progress-display");
+      const { isRunning, data } = progressData;
+
+      const formatDuration = (ms) => {
+        const h = Math.floor(ms / 3600000);
+        const m = Math.floor((ms % 3600000) / 60000);
+        const s = Math.floor((ms % 60000) / 1000);
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
+      };
+
+      if (!isRunning && (data.status === "complete" || data.status === "completed")) {
+        display.innerHTML = `
+          <div style="text-align: center; padding: 40px;">
+            <div style="font-size: 48px; margin-bottom: 15px;">✅</div>
+            <div style="color: #14F195; font-size: 18px; margin-bottom: 10px;">Analysis Complete!</div>
+            <div style="color: #888; margin-bottom: 5px;">Found ${data.profitable || 0} profitable wallets</div>
+            <div style="color: #666; font-size: 0.9rem;">Scanned ${(data.daysScanned || 0).toFixed(1)} / ${data.daysTotal || 30} days</div>
+          </div>`;
+        document.getElementById("btn-new-analysis").classList.remove("hidden");
+        document.getElementById("btn-stop-analysis").style.display = "none";
+        loadWallets();
+
+      } else if (isRunning || data.status === "running" || data.status === "scanning" || data.status === "analyzing") {
+        const processed = data.processed || 0;
+        const traders = data.traders || 0;
+        const profitable = data.profitable || 0;
+        const pct = data.timeProgressPercent || 0;
+        const daysScanned = data.daysScanned || 0;
+        const daysTotal = data.daysTotal || 30;
+        const remainingMs = data.remainingMs || 0;
+        const elapsedMs = data.elapsedMs || 0;
+        const txsPerSec = data.avgTxsPerSecond || 0;
+        const eta = data.etaFormatted || null;
+        const remainingFormatted = remainingMs > 0 && daysScanned > 0.01 ? formatDuration(remainingMs) : "Calculating...";
+        const elapsedFormatted = formatDuration(elapsedMs);
+        const currentTime = data.currentBlockTimeFormatted || "—";
+        const targetTime = data.targetStartTimeFormatted || "—";
+
+        const progressBar = `
+          <div style="margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.85rem;">
+              <span style="color: #9945FF;">📅 ${daysScanned.toFixed(2)} / ${daysTotal} days scanned</span>
+              <span style="color: #14F195;">${pct}%</span>
+            </div>
+            <div style="background: #333; border-radius: 10px; overflow: hidden; height: 10px;">
+              <div style="background: linear-gradient(90deg, #9945FF, #14F195); height: 100%; width: ${Math.max(pct, 0.5)}%; transition: width 0.5s;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 0.75rem; color: #555;">
+              <span>${currentTime}</span>
+              <span>→ ${targetTime}</span>
+            </div>
+          </div>`;
+
+        const timeRow = data.status === "scanning" ? `
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px; font-size: 0.85rem;">
+            <div style="text-align: center; background: #0f0f0f; padding: 10px; border-radius: 8px;">
+              <div style="color: #666; margin-bottom: 3px;">Elapsed</div>
+              <div style="color: #e0e0e0;">${elapsedFormatted}</div>
+            </div>
+            <div style="text-align: center; background: #0f0f0f; padding: 10px; border-radius: 8px;">
+              <div style="color: #666; margin-bottom: 3px;">Remaining</div>
+              <div style="color: #ffa500;">${remainingFormatted}</div>
+            </div>
+            <div style="text-align: center; background: #0f0f0f; padding: 10px; border-radius: 8px;">
+              <div style="color: #666; margin-bottom: 3px;">Speed</div>
+              <div style="color: #14F195;">${txsPerSec.toLocaleString()} tx/s</div>
+            </div>
+          </div>` : `
+          <div style="background: linear-gradient(135deg, #14F19515, #9945FF15); border: 1px solid #14F19530; border-radius: 8px; padding: 12px; margin-bottom: 15px; text-align: center;">
+            <div style="color: #14F195; font-weight: 500;">🔍 Analyzing Discovered Wallets</div>
+            <div style="color: #888; font-size: 0.9rem; margin-top: 4px;">Filtering ${traders.toLocaleString()} traders by profitability criteria...</div>
+          </div>`;
+
+        display.innerHTML = `
+          <div style="padding: 20px;">
+            ${progressBar}
+            ${timeRow}
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 500px; margin: 0 auto;">
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">Transactions</div>
+                <div style="font-size: 20px; color: #14F195;">${processed.toLocaleString()}</div>
+              </div>
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">Traders</div>
+                <div style="font-size: 20px; color: #14F195;">${traders.toLocaleString()}</div>
+              </div>
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">Profitable</div>
+                <div style="font-size: 20px; color: #14F195;">${profitable.toLocaleString()}</div>
+              </div>
+            </div>
+            ${eta ? `<div style="margin-top: 15px; text-align: center; font-size: 0.85rem;"><span style="color: #888;">ETA:</span> <span style="color: #ffa500;">${eta}</span></div>` : ""}
+          </div>`;
+
+      } else {
+        const errorMsg = data.error || "Scanner stopped unexpectedly. Check your API key and try again.";
+        display.innerHTML = `
+          <div style="text-align: center; padding: 40px;">
+            <div style="font-size: 48px; margin-bottom: 15px;">❌</div>
+            <div style="color: #ff6b6b; font-size: 18px; margin-bottom: 10px;">Scanner Stopped</div>
+            <div style="color: #888; margin-bottom: 20px; font-size: 0.9rem;">${errorMsg}</div>
+          </div>`;
+        document.getElementById("btn-new-analysis").classList.remove("hidden");
+        document.getElementById("btn-stop-analysis").style.display = "none";
+      }
+    }
 
     async function stopAnalysis() {
       try {
@@ -693,12 +838,20 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
 
     function startProgressPolling() {
       clearInterval(progressInterval);
+      let walletsRefreshCounter = 0;
       progressInterval = setInterval(async () => {
         try {
           const res = await fetch('/api/progress');
           const data = await res.json();
           updateProgressDisplay(data);
-          
+
+          // Refresh Results every 10 seconds during scanning
+          walletsRefreshCounter++;
+          if (walletsRefreshCounter >= 10) {
+            walletsRefreshCounter = 0;
+            loadWallets();
+          }
+
           if (!data.isRunning) {
             clearInterval(progressInterval);
           }
@@ -732,7 +885,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       profitableCount.textContent = profitable.length;
       
       if (wallets.length > 0) {
-        const totalRoi = wallets.reduce((sum, w) => sum + w.avgRoi, 0);
+        const totalRoi = wallets.reduce((sum, w) => sum + (w.roi || w.avgRoi || 0), 0);
         const totalWinrate = wallets.reduce((sum, w) => sum + w.winrate, 0);
         avgRoi.textContent = (totalRoi / wallets.length).toFixed(1) + '%';
         avgWinrate.textContent = (totalWinrate / wallets.length * 100).toFixed(1) + '%';
@@ -746,7 +899,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
           </td>
           <td>${wallet.totalTxs}</td>
           <td>${(wallet.winrate * 100).toFixed(1)}%</td>
-          <td class="${wallet.avgRoi > 0 ? 'profit' : 'loss'}">${wallet.avgRoi.toFixed(1)}%</td>
+          <td class="${(wallet.roi || wallet.avgRoi || 0) > 0 ? 'profit' : 'loss'}">${((wallet.roi || wallet.avgRoi || 0) * 100).toFixed(1)}%</td>
           <td class="${wallet.totalProfit > 0 ? 'profit' : 'loss'}">$${wallet.totalProfit.toFixed(2)}</td>
           <td>${wallet.avgHoldDays.toFixed(1)}</td>
           <td>${wallet.balance.toFixed(2)}</td>
@@ -762,11 +915,13 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         
         if (config.heliusApiKey) document.getElementById('config-api-key').value = config.heliusApiKey;
         document.getElementById('config-days').value = config.daysToScan || 30;
-        document.getElementById('config-delay').value = config.delayMs || 15;
-        document.getElementById('config-min-txs').value = config.minTxs || 20;
+        document.getElementById('config-target-rps').value = config.targetRps || 45;
+        document.getElementById('config-chunk-size').value = config.chunkSize || 10;
+        document.getElementById('config-min-txs').value = config.minTxs || 10;
         document.getElementById('config-min-winrate').value = config.minWinrate || 0.4;
-        document.getElementById('config-min-roi').value = config.minRoi || 2.0;
+        document.getElementById('config-min-roi').value = config.minRoi || 0.5;
         document.getElementById('config-min-profit').value = config.minProfit || 10;
+        document.getElementById('config-min-age').value = config.minWalletAge || 0;
       } catch (e) {
         console.error('Failed to load config:', e);
       }
@@ -776,11 +931,13 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       const config = {
         heliusApiKey: document.getElementById('config-api-key').value,
         daysToScan: parseInt(document.getElementById('config-days').value),
-        delayMs: parseInt(document.getElementById('config-delay').value),
+        targetRps: parseInt(document.getElementById('config-target-rps').value),
+        chunkSize: parseInt(document.getElementById('config-chunk-size').value),
         minTxs: parseInt(document.getElementById('config-min-txs').value),
         minWinrate: parseFloat(document.getElementById('config-min-winrate').value),
         minRoi: parseFloat(document.getElementById('config-min-roi').value),
-        minProfit: parseFloat(document.getElementById('config-min-profit').value)
+        minProfit: parseFloat(document.getElementById('config-min-profit').value),
+        minWalletAge: parseFloat(document.getElementById('config-min-age').value) || 0
       };
       
       try {
@@ -812,8 +969,16 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
 
     // Initialize
     loadWallets();
-updateScannerDisplay();
+    updateScannerDisplay();
     loadConfig();
+
+    // Auto-resume polling if scan is already running (e.g. after page refresh)
+    fetch('/api/progress').then(r => r.json()).then(data => {
+      if (data.isRunning) {
+        showProgressStep('🔍 Blockchain Discovery in Progress', 2);
+        startProgressPolling();
+      }
+    }).catch(() => {});
   </script>
 </body>
 </html>

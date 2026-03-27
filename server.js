@@ -103,7 +103,7 @@ app.post('/api/scan/start', (req, res) => {
   // Start scanner
   scannerProcess = spawn('node', ['scripts/scanner.js'], {
     cwd: __dirname,
-    env: { ...process.env, ...config }
+    env: { ...process.env }
   });
   
   scannerProcess.stdout.on('data', (data) => {
@@ -117,6 +117,22 @@ app.post('/api/scan/start', (req, res) => {
   scannerProcess.on('close', (code) => {
     console.log(`Scanner exited with code ${code}`);
     scannerProcess = null;
+    if (code !== 0) {
+      // Write error status so frontend can display it
+      try {
+        const existing = fs.existsSync(PROGRESS_FILE)
+          ? JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'))
+          : {};
+        if (existing.status !== 'complete' && existing.status !== 'completed') {
+          fs.writeFileSync(PROGRESS_FILE, JSON.stringify({
+            ...existing,
+            status: 'error',
+            error: `Scanner exited with code ${code}. Check your Helius API key.`,
+            lastUpdate: new Date().toISOString()
+          }, null, 2));
+        }
+      } catch (e) {}
+    }
   });
   
   res.json({ success: true, message: 'Scan started' });
