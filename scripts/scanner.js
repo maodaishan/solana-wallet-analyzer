@@ -10,8 +10,9 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const PROGRESS_FILE = path.join(DATA_DIR, 'progress.json');
-const WALLETS_FILE = path.join(DATA_DIR, 'wallets.json');
+const TRADERS_FILE = path.join(DATA_DIR, 'traders.json');
 const CHECKPOINT_FILE = path.join(DATA_DIR, 'checkpoint.json');
+const SCAN_METADATA_FILE = path.join(DATA_DIR, 'scan-metadata.json');
 
 // Load config
 const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -23,15 +24,6 @@ const DAYS_TO_SCAN = config.daysToScan || 7;
 const DELAY_MS = config.delayMs || 40;
 const TARGET_RPS = config.targetRps || 45; // RPC calls per second
 const CHUNK_SIZE = config.chunkSize || 10; // concurrent RPC calls
-
-// Filters
-const FILTERS = {
-  minTxs: config.minTxs || 10,
-  minWinrate: config.minWinrate || 0.4,
-  minRoi: config.minRoi || 0.5,
-  minProfit: config.minProfit || 10,
-  minWalletAge: config.minWalletAge || 0,
-};
 
 // Time calculations
 const scanStartTime = Date.now();
@@ -72,13 +64,53 @@ async function rpc(method, params, retries = 5) {
   }
 }
 
+// Batch JSON-RPC: send multiple getTransaction calls in a single HTTP request
+async function batchRpc(requests, retries = 5) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const body = requests.map((req, i) => ({
+        jsonrpc: '2.0',
+        id: i,
+        method: req.method,
+        params: req.params,
+      }));
+      const res = await fetch(RPC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        if (data.error?.message?.includes('rate')) {
+          console.log(`⏳ Batch rate limited, waiting 2s... (attempt ${attempt})`);
+          await delay(2000);
+          continue;
+        }
+        throw new Error(data.error?.message || 'Batch RPC returned non-array');
+      }
+      // Sort by id to maintain order, extract results
+      data.sort((a, b) => a.id - b.id);
+      return data.map(d => d.result || null);
+    } catch (e) {
+      if (attempt === retries) throw e;
+      const waitMs = attempt * 2000;
+      console.log(`🔄 Batch RPC error (attempt ${attempt}/${retries}), retrying in ${waitMs}ms: ${e.message}`);
+      await delay(waitMs);
+    }
+  }
+}
+
 async function getSigs(before = null) {
   const params = [PUMPFUN, { limit: 1000, ...(before ? { before: before } : {}) }];
   return await rpc('getSignaturesForAddress', params);
 }
 
-async function getTx(sig) {
-  return await rpc('getTransaction', [sig, { maxSupportedTransactionVersion: 0 }]);
+async function getTxBatch(sigs) {
+  const requests = sigs.map(sig => ({
+    method: 'getTransaction',
+    params: [sig, { maxSupportedTransactionVersion: 0 }],
+  }));
+  return await batchRpc(requests);
 }
 
 function extractTrade(tx) {
@@ -160,11 +192,6 @@ async function main() {
   // Write initial progress immediately so frontend knows scanner started
   saveProgress(state);
 
-  // Write interim results every 10 seconds during scanning
-  const interimInterval = setInterval(() => {
-    if (state.status === 'scanning') writeInterimResults(state);
-  }, 10000);
-
   // Load checkpoint if exists
   if (fs.existsSync(CHECKPOINT_FILE)) {
     try {
@@ -176,19 +203,45 @@ async function main() {
     }
   }
   
+  let scanStartBlockTime = null;
+
   try {
     while (true) {
       const sigs = await getSigs(state.lastSig);
       if (!sigs.length) break;
-      
-      console.log(`📡 Processing ${sigs.length} signatures`);
 
-      for (let i = 0; i < sigs.length; i += CHUNK_SIZE) {
-        const chunk = sigs.slice(i, i + CHUNK_SIZE);
+      // Record the most recent blockTime on first batch (for webhook dedup)
+      if (!scanStartBlockTime && sigs[0]?.blockTime) {
+        scanStartBlockTime = sigs[0].blockTime;
+        fs.writeFileSync(SCAN_METADATA_FILE, JSON.stringify({
+          isRunning: true,
+          scanStartBlockTime,
+          startedAt: new Date().toISOString(),
+        }));
+        console.log(`📌 Scan boundary: webhook will skip txs before ${new Date(scanStartBlockTime * 1000).toLocaleString()}`);
+      }
+      
+      // Filter out failed transactions BEFORE fetching full data (saves ~30-50% credits)
+      // Also filter out transactions already outside time range using blockTime from signatures
+      const successSigs = sigs.filter(s => {
+        if (s.err !== null) return false; // skip failed txs
+        if (s.blockTime && s.blockTime < targetStartTime / 1000) return false; // skip out-of-range txs
+        return true;
+      });
+      const skippedCount = sigs.length - successSigs.length;
+      console.log(`📡 Processing ${successSigs.length} successful signatures (skipped ${skippedCount} failed/out-of-range txs)`);
+
+      // Update currentBlockTime from sigs metadata (no extra RPC needed)
+      const lastSigBlockTime = sigs[sigs.length - 1]?.blockTime;
+      if (lastSigBlockTime) state.currentBlockTime = lastSigBlockTime;
+
+      for (let i = 0; i < successSigs.length; i += CHUNK_SIZE) {
+        const chunk = successSigs.slice(i, i + CHUNK_SIZE);
         const chunkStart = Date.now();
 
         try {
-          const txs = await Promise.all(chunk.map(s => getTx(s.signature)));
+          // Use batch RPC: single HTTP request for the whole chunk
+          const txs = await getTxBatch(chunk.map(s => s.signature));
 
           for (const tx of txs) {
             if (!tx) continue;
@@ -199,7 +252,7 @@ async function main() {
               console.log(`⏰ Reached time limit: ${new Date(tx.blockTime * 1000).toLocaleString()}`);
               state.status = 'completed';
               saveProgress(state);
-              return await finalize(state);
+              return await finalize(state, scanStartBlockTime);
             }
 
             const trade = extractTrade(tx);
@@ -207,7 +260,7 @@ async function main() {
 
             const trader = trade.trader;
             if (!state.traders[trader]) {
-              state.traders[trader] = { spent: 0, received: 0, txs: 0, firstSeen: trade.blockTime };
+              state.traders[trader] = { spent: 0, received: 0, txs: 0, firstSeen: trade.blockTime, lastSeen: trade.blockTime };
             }
             if (trade.solChange < 0) {
               state.traders[trader].spent += Math.abs(trade.solChange);
@@ -216,6 +269,9 @@ async function main() {
             }
             if (trade.blockTime && trade.blockTime < state.traders[trader].firstSeen) {
               state.traders[trader].firstSeen = trade.blockTime;
+            }
+            if (trade.blockTime && (!state.traders[trader].lastSeen || trade.blockTime > state.traders[trader].lastSeen)) {
+              state.traders[trader].lastSeen = trade.blockTime;
             }
             state.traders[trader].txs++;
             state.processed++;
@@ -250,13 +306,11 @@ async function main() {
       }
     }
     
-    clearInterval(interimInterval);
     state.status = 'completed';
     saveProgress(state);
-    return await finalize(state);
+    return await finalize(state, scanStartBlockTime);
 
   } catch (error) {
-    clearInterval(interimInterval);
     console.error('❌ Scanner error:', error);
     state.status = 'error';
     state.error = error.message;
@@ -265,68 +319,38 @@ async function main() {
   }
 }
 
-function walletAgeDays(data) {
-  if (!data.firstSeen) return 0;
-  return (Math.floor(Date.now() / 1000) - data.firstSeen) / 86400;
-}
-
-function passesFilters(data) {
-  const profit = data.received - data.spent;
-  const roi = data.spent > 0 ? profit / data.spent : 0;
-  const winrate = data.txs > 0 ? (data.received > 0 ? 1 : 0) : 0;
-  const ageDays = walletAgeDays(data);
-  return (
-    data.txs >= FILTERS.minTxs &&
-    roi >= FILTERS.minRoi &&
-    winrate >= FILTERS.minWinrate &&
-    profit >= FILTERS.minProfit &&
-    ageDays >= FILTERS.minWalletAge
-  );
-}
-
-function toWalletResult([address, data]) {
-  return {
-    address,
-    totalTxs: data.txs,
-    totalSpent: data.spent,
-    totalReceived: data.received,
-    totalProfit: data.received - data.spent,
-    roi: data.spent > 0 ? (data.received - data.spent) / data.spent : 0,
-    winrate: data.txs > 0 ? (data.received > 0 ? 1 : 0) : 0,
-    walletAgeDays: parseFloat(walletAgeDays(data).toFixed(1)),
-    balance: 0
-  };
-}
-
-function writeInterimResults(state) {
-  try {
-    const results = Object.entries(state.traders)
-      .filter(([_, data]) => passesFilters(data))
-      .map(toWalletResult);
-    fs.writeFileSync(WALLETS_FILE, JSON.stringify(results, null, 2));
-  } catch (e) {
-    console.error('Failed to write interim results:', e.message);
-  }
-}
-
-async function finalize(state) {
-  console.log('\n🔍 Analysis phase starting...');
-  state.status = 'analyzing';
+async function finalize(state, scanStartBlockTime) {
+  console.log('\n💾 Saving raw traders data...');
+  state.status = 'saving';
   saveProgress(state);
-  
-  const results = Object.entries(state.traders)
-    .filter(([_, data]) => passesFilters(data))
-    .map(toWalletResult);
-  
-  console.log(`✅ Analysis complete: ${results.length} profitable wallets found`);
-  
-  fs.writeFileSync(WALLETS_FILE, JSON.stringify(results, null, 2));
-  
+
+  const traderCount = Object.keys(state.traders).length;
+  const profitable = Object.values(state.traders).filter(t => t.received > t.spent).length;
+
+  // Write raw traders data (atomic: write to .tmp then rename)
+  const tmpFile = TRADERS_FILE + '.tmp';
+  fs.writeFileSync(tmpFile, JSON.stringify(state.traders));
+  fs.renameSync(tmpFile, TRADERS_FILE);
+  console.log(`✅ Saved ${traderCount} traders (${profitable} profitable) to traders.json`);
+
+  // Update scan-metadata to mark completion
+  fs.writeFileSync(SCAN_METADATA_FILE, JSON.stringify({
+    isRunning: false,
+    scanStartBlockTime: scanStartBlockTime || null,
+    completedAt: new Date().toISOString(),
+  }));
+
+  // Clean up checkpoint after successful save
+  if (fs.existsSync(CHECKPOINT_FILE)) {
+    fs.unlinkSync(CHECKPOINT_FILE);
+    console.log('🗑️ Checkpoint cleared');
+  }
+
   // Final progress update
   state.status = 'complete';
   saveProgress(state);
-  
-  return results;
+
+  console.log(`✅ Scanner complete. Server will apply filters on-demand.`);
 }
 
 // Start scanner
