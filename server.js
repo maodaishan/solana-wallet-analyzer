@@ -490,22 +490,26 @@ app.post('/api/scan/start', async (req, res) => {
 
 // API: Stop scan (stops scanner process, optionally stops webhook)
 app.post('/api/scan/stop', async (req, res) => {
-  const { stopWebhook: shouldStopWebhook } = req.body || {};
+  try {
+    const { stopWebhook: shouldStopWebhook } = req.body || {};
 
-  if (scannerProcess) {
-    scannerProcess.kill('SIGTERM');
-    scannerProcess = null;
+    if (scannerProcess) {
+      scannerProcess.kill('SIGTERM');
+      scannerProcess = null;
+    }
+
+    if (shouldStopWebhook && webhookState.webhookId) {
+      const config = loadConfig();
+      await deleteWebhook(config);
+    }
+
+    // Save any accumulated webhook data
+    saveTradersData();
+
+    res.json({ success: true, message: 'Scan stopped', webhookStopped: shouldStopWebhook || false });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-
-  if (shouldStopWebhook && webhookState.webhookId) {
-    const config = loadConfig();
-    await deleteWebhook(config);
-  }
-
-  // Save any accumulated webhook data
-  saveTradersData();
-
-  res.json({ success: true, message: 'Scan stopped', webhookStopped: shouldStopWebhook || false });
 });
 
 // API: Webhook status
@@ -707,6 +711,12 @@ app.post('/api/analyze/wallets', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// API error handler — return JSON instead of Express's default HTML
+app.use('/api', (err, req, res, next) => {
+  console.error('API error:', err.message);
+  res.status(err.status || 500).json({ error: err.message });
 });
 
 // ============================================================

@@ -1041,6 +1041,10 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
 
       try {
         const res = await fetch('/api/reset', { method: 'POST' });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Server returned ${res.status}: ${text.substring(0, 100)}`);
+        }
         const data = await res.json();
         if (data.success) {
           alert('All data has been reset.');
