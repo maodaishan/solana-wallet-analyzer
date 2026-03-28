@@ -196,9 +196,12 @@
           </div>
         </div>
         
-        <div style="margin-bottom: 15px; text-align: right;">
-          <button onclick="downloadFilteredResults()" style="background: #9945FF; color: white;">
-            📥 Download Results CSV
+        <div style="margin-bottom: 15px; text-align: right; display: flex; justify-content: flex-end; gap: 10px;">
+          <button onclick="downloadFilteredResults('addresses')" style="background: #9945FF; color: white;">
+            📥 Addresses Only
+          </button>
+          <button onclick="downloadFilteredResults('detailed')" style="background: #14F195; color: #000;">
+            📊 Detailed CSV
           </button>
         </div>
         
@@ -1059,9 +1062,10 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       }
     }
 
-    function downloadFilteredResults() {
+    function downloadFilteredResults(mode) {
       const params = new URLSearchParams({
         format: 'csv',
+        mode: mode || 'addresses',
         minRoi: document.getElementById('config-min-roi').value || 0,
         minWinrate: document.getElementById('config-min-winrate').value || 0,
         minTxs: document.getElementById('config-min-txs').value || 0,

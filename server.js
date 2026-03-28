@@ -367,6 +367,10 @@ app.post('/api/config', (req, res) => {
 // API: Get wallets (on-demand filtering from in-memory traders data)
 app.get('/api/wallets', (req, res) => {
   try {
+    // Reload traders from file during scanning so Results tab shows intermediate data
+    if (scannerProcess) {
+      loadTradersData();
+    }
     const config = loadConfig();
     const results = filterTraders(config);
     res.json(results);
@@ -654,10 +658,21 @@ app.get('/api/download/filtered', (req, res) => {
     if (results.length === 0) {
       return res.status(404).json({ error: 'No wallets found matching filters' });
     }
-    const addresses = results.map(w => w.address).join(', ');
+
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=wallets-filtered.csv');
-    res.send(addresses);
+
+    if (req.query.mode === 'detailed') {
+      const header = 'Address,Total Trades,Winrate,ROI,Total Profit (SOL),Total Spent (SOL),Total Received (SOL),Wallet Age (days)';
+      const rows = results.map(w =>
+        `${w.address},${w.totalTxs},${(w.winrate * 100).toFixed(1)}%,${(w.roi * 100).toFixed(1)}%,${w.totalProfit.toFixed(4)},${w.totalSpent.toFixed(4)},${w.totalReceived.toFixed(4)},${w.walletAgeDays}`
+      );
+      res.setHeader('Content-Disposition', 'attachment; filename=wallets-detailed.csv');
+      res.send(header + '\n' + rows.join('\n'));
+    } else {
+      const addresses = results.map(w => w.address).join(', ');
+      res.setHeader('Content-Disposition', 'attachment; filename=wallets-filtered.csv');
+      res.send(addresses);
+    }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -280,6 +280,13 @@ async function main() {
               saveProgress(state);
               saveCheckpoint(state);
             }
+            // Write intermediate traders data every 5000 txs so Results tab can show progress
+            if (state.processed % 5000 === 0) {
+              const tmpFile = TRADERS_FILE + '.tmp';
+              fs.writeFileSync(tmpFile, JSON.stringify(state.traders));
+              fs.renameSync(tmpFile, TRADERS_FILE);
+              console.log(`💾 Intermediate save: ${Object.keys(state.traders).length} traders`);
+            }
           }
         } catch (e) {
           console.error(`❌ Chunk processing error:`, e.message);
