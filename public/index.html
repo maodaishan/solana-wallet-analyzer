@@ -449,6 +449,11 @@
             <input type="number" id="config-chunk-size" min="1" max="50" value="10" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
             <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Parallel batch calls (each batch = 100 txs)</div>
           </div>
+          <div>
+            <label style="display: block; margin-bottom: 5px; color: #9945FF; font-weight: 500;">Data Retention (days)</label>
+            <input type="number" id="config-retention-days" min="1" max="365" value="30" style="width: 100%; padding: 8px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+            <div style="color: #666; font-size: 0.8rem; margin-top: 3px;">Auto-remove traders inactive longer than this. Runs daily at 03:00.</div>
+          </div>
         </div>
 
         <!-- Filter Settings -->
@@ -994,6 +999,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         document.getElementById('config-days').value = config.daysToScan || 30;
         document.getElementById('config-target-rps').value = config.targetRps || 45;
         document.getElementById('config-chunk-size').value = config.chunkSize || 10;
+        document.getElementById('config-retention-days').value = config.dataRetentionDays || 30;
         document.getElementById('config-min-txs').value = config.minTxs || 10;
         document.getElementById('config-min-winrate').value = config.minWinrate || 0.4;
         document.getElementById('config-min-roi').value = config.minRoi || 0.5;
@@ -1011,6 +1017,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         daysToScan: parseFloat(document.getElementById('config-days').value),
         targetRps: parseInt(document.getElementById('config-target-rps').value),
         chunkSize: parseInt(document.getElementById('config-chunk-size').value),
+        dataRetentionDays: parseInt(document.getElementById('config-retention-days').value),
         minTxs: parseInt(document.getElementById('config-min-txs').value),
         minWinrate: parseFloat(document.getElementById('config-min-winrate').value),
         minRoi: parseFloat(document.getElementById('config-min-roi').value),

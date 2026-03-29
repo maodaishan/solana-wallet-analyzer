@@ -278,10 +278,10 @@ async function main() {
 
             if (state.processed % 1000 === 0) {
               saveProgress(state);
-              saveCheckpoint(state);
             }
-            // Write intermediate traders data every 5000 txs so Results tab can show progress
-            if (state.processed % 5000 === 0) {
+            // Save checkpoint + intermediate traders data every 10000 txs
+            if (state.processed % 10000 === 0) {
+              saveCheckpoint(state);
               const tmpFile = TRADERS_FILE + '.tmp';
               fs.writeFileSync(tmpFile, JSON.stringify(state.traders));
               fs.renameSync(tmpFile, TRADERS_FILE);

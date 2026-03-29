@@ -107,10 +107,49 @@ loadScanMetadata();
 
 // Periodic persistence of webhook-accumulated trader data (every 60s)
 setInterval(() => {
-  saveTradersData();
+  // During scanning, scanner owns traders.json — server should only read, not write
+  if (!scannerProcess) {
+    saveTradersData();
+  }
   // Also reload scan-metadata in case scanner updated it
   loadScanMetadata();
 }, 60000);
+
+// Daily cleanup: remove traders inactive for longer than dataRetentionDays
+function pruneExpiredTraders() {
+  const config = loadConfig();
+  const retentionDays = config.dataRetentionDays || 30;
+  const cutoff = Date.now() / 1000 - retentionDays * 86400;
+  const before = Object.keys(tradersData).length;
+  for (const addr of Object.keys(tradersData)) {
+    if ((tradersData[addr].lastSeen || 0) < cutoff) {
+      delete tradersData[addr];
+    }
+  }
+  const removed = before - Object.keys(tradersData).length;
+  if (removed > 0) {
+    tradersDataDirty = true;
+    saveTradersData();
+    console.log(`🧹 Pruned ${removed} inactive traders (>${retentionDays}d), ${Object.keys(tradersData).length} remaining`);
+  }
+}
+
+// Run daily at 3:00 AM
+function scheduleDailyPrune() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(3, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const msUntil = next - now;
+  setTimeout(() => {
+    if (!scannerProcess) pruneExpiredTraders();
+    setInterval(() => {
+      if (!scannerProcess) pruneExpiredTraders();
+    }, 24 * 60 * 60 * 1000);
+  }, msUntil);
+  console.log(`🧹 Data pruning scheduled at 03:00 daily (next in ${(msUntil / 3600000).toFixed(1)}h)`);
+}
+scheduleDailyPrune();
 
 // ============================================================
 // On-demand filtering: traders → wallet results
@@ -365,11 +404,14 @@ app.post('/api/config', (req, res) => {
 });
 
 // API: Get wallets (on-demand filtering from in-memory traders data)
+let lastTradersReload = 0;
 app.get('/api/wallets', (req, res) => {
   try {
-    // Reload traders from file during scanning so Results tab shows intermediate data
-    if (scannerProcess) {
+    // Reload traders from file during scanning, at most once per 30 seconds
+    const now = Date.now();
+    if (scannerProcess && now - lastTradersReload > 30000) {
       loadTradersData();
+      lastTradersReload = now;
     }
     const config = loadConfig();
     const results = filterTraders(config);
