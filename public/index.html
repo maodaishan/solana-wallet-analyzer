@@ -754,7 +754,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         const webhookInfo = progressData.webhookActive
           ? `<div style="background: #14F19515; border: 1px solid #14F19530; border-radius: 8px; padding: 12px; margin-top: 15px;">
                <div style="color: #14F195; font-weight: 500;">📡 Real-time Webhook Active</div>
-               <div style="color: #888; font-size: 0.85rem; margin-top: 4px;">
+               <div class="webhook-live-panel" style="color: #888; font-size: 0.85rem; margin-top: 4px;">
                  Events: ${(data.webhookEventsReceived || 0).toLocaleString()} |
                  Traders updated: ${(data.webhookTradersUpdated || 0).toLocaleString()}
                </div>
