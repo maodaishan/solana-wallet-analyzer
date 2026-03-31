@@ -756,7 +756,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         return `${s}s`;
       };
 
-      if (!isRunning && (data.status === "complete" || data.status === "completed")) {
+      if (!isRunning && (data.status === "complete" || data.status === "completed" || (progressData.totalTraders > 0 && data.status !== "scanning"))) {
         const webhookInfo = progressData.webhookActive
           ? `<div style="background: #14F19515; border: 1px solid #14F19530; border-radius: 8px; padding: 12px; margin-top: 15px;">
                <div style="color: #14F195; font-weight: 500;">📡 Real-time Webhook Active</div>
@@ -1189,8 +1189,8 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         document.getElementById('progress-mode-title').textContent = '📡 Real-time Monitoring Active';
         updateProgressDisplay(data);
         startWebhookPolling();
-      } else if (data.data && (data.data.status === 'complete' || data.data.status === 'completed') && data.totalTraders > 0) {
-        // Previous scan completed, webhook stopped — show completion with continue/restart buttons
+      } else if (data.totalTraders > 0) {
+        // Has existing trader data — show completion screen with continue/restart buttons
         switchTab('scanner', document.querySelectorAll('.tab')[1]);
         document.getElementById('step-mode-selection').classList.add('hidden');
         document.getElementById('step-progress').classList.remove('hidden');
