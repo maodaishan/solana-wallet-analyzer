@@ -400,7 +400,13 @@
           </div>
         </div>
         
-        <div style="text-align: center; margin-top: 20px;">
+        <div style="text-align: center; margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+          <button id="btn-continue-scan" onclick="continueScan()" class="hidden" style="background: #14F195; color: #000; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            ▶ Continue Scan
+          </button>
+          <button id="btn-restart-webhook" onclick="restartWebhook()" class="hidden" style="background: #9945FF; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">
+            📡 Restart Webhook
+          </button>
           <button id="btn-new-analysis" onclick="startNewAnalysis()" class="hidden" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">
             Start New Analysis
           </button>
@@ -760,16 +766,33 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
                </div>
                <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Monitoring new PumpFun trades (zero credits). Results update automatically.</div>
              </div>`
+          : `<div style="background: #ff6b6b15; border: 1px solid #ff6b6b30; border-radius: 8px; padding: 12px; margin-top: 15px;">
+               <div style="color: #ff6b6b; font-weight: 500;">📡 Webhook Inactive</div>
+               <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Click "Continue Scan" to fill the gap and restart webhook, or "Restart Webhook" to only resume real-time monitoring.</div>
+             </div>`;
+
+        // Show data coverage info
+        const dataNewestTime = progressData.dataNewestTime;
+        const totalTraders = progressData.totalTraders || 0;
+        const coverageInfo = dataNewestTime
+          ? `<div style="color: #666; font-size: 0.85rem; margin-top: 8px;">Data coverage up to: ${new Date(dataNewestTime * 1000).toLocaleString()} | Total traders: ${totalTraders.toLocaleString()}</div>`
           : '';
+
         display.innerHTML = `
           <div style="text-align: center; padding: 40px;">
             <div style="font-size: 48px; margin-bottom: 15px;">✅</div>
-            <div style="color: #14F195; font-size: 18px; margin-bottom: 10px;">Historical Scan Complete!</div>
+            <div style="color: #14F195; font-size: 18px; margin-bottom: 10px;">Scan Complete!</div>
             <div style="color: #888; margin-bottom: 5px;">Found ${data.profitable || 0} profitable wallets</div>
             <div style="color: #666; font-size: 0.9rem;">Scanned ${(data.daysScanned || 0).toFixed(1)} / ${data.daysTotal || 30} days</div>
+            ${coverageInfo}
             ${webhookInfo}
           </div>`;
         document.getElementById("btn-new-analysis").classList.remove("hidden");
+        document.getElementById("btn-continue-scan").classList.remove("hidden");
+        // Show restart webhook button only if webhook is not active
+        if (!progressData.webhookActive) {
+          document.getElementById("btn-restart-webhook").classList.remove("hidden");
+        }
         document.getElementById("btn-stop-analysis").style.display = "none";
         // Keep polling if webhook is active
         if (progressData.webhookActive) {
@@ -883,7 +906,73 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       clearInterval(webhookInterval);
       goBackToModeSelection();
       document.getElementById('btn-new-analysis').classList.add('hidden');
+      document.getElementById('btn-continue-scan').classList.add('hidden');
+      document.getElementById('btn-restart-webhook').classList.add('hidden');
       document.getElementById('btn-stop-analysis').style.display = 'block';
+    }
+
+    async function continueScan() {
+      try {
+        const res = await fetch('/api/scan/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ continue: true })
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
+        document.getElementById('btn-continue-scan').classList.add('hidden');
+        document.getElementById('btn-new-analysis').classList.add('hidden');
+        document.getElementById('btn-restart-webhook').classList.add('hidden');
+        document.getElementById('btn-stop-analysis').style.display = 'block';
+
+        const webhookMsg = data.webhookRegistered
+          ? '🔄 Continue Scan + 📡 Webhook Active'
+          : '🔄 Continue Scan in Progress';
+        showProgressStep(webhookMsg, 2);
+        startProgressPolling();
+      } catch (e) {
+        alert('Failed to start continue scan: ' + e.message);
+      }
+    }
+
+    async function restartWebhook() {
+      try {
+        const btn = document.getElementById('btn-restart-webhook');
+        btn.textContent = '📡 Registering...';
+        btn.disabled = true;
+
+        const res = await fetch('/api/webhook/start', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.error) {
+          alert('Failed to restart webhook: ' + data.error);
+          btn.textContent = '📡 Restart Webhook';
+          btn.disabled = false;
+          return;
+        }
+
+        btn.classList.add('hidden');
+        btn.textContent = '📡 Restart Webhook';
+        btn.disabled = false;
+
+        // Start polling for webhook status
+        startWebhookPolling();
+
+        // Refresh the progress display to show active webhook
+        const progressRes = await fetch('/api/progress');
+        const progressData = await progressRes.json();
+        updateProgressDisplay(progressData);
+      } catch (e) {
+        alert('Failed to restart webhook: ' + e.message);
+        const btn = document.getElementById('btn-restart-webhook');
+        btn.textContent = '📡 Restart Webhook';
+        btn.disabled = false;
+      }
     }
 
     // Webhook status polling (continues after scan completes)
@@ -1085,7 +1174,7 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
     updateScannerDisplay();
     loadConfig();
 
-    // Auto-resume polling if scan is already running or webhook is active
+    // Auto-resume polling if scan is already running, webhook is active, or previous scan completed
     fetch('/api/progress').then(r => r.json()).then(data => {
       if (data.isRunning) {
         showProgressStep('🔍 Blockchain Discovery in Progress', 2);
@@ -1098,6 +1187,13 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         document.getElementById('progress-mode-title').textContent = '📡 Real-time Monitoring Active';
         updateProgressDisplay(data);
         startWebhookPolling();
+      } else if (data.data && (data.data.status === 'complete' || data.data.status === 'completed') && data.totalTraders > 0) {
+        // Previous scan completed, webhook stopped — show completion with continue/restart buttons
+        switchTab('scanner', document.querySelectorAll('.tab')[1]);
+        document.getElementById('step-mode-selection').classList.add('hidden');
+        document.getElementById('step-progress').classList.remove('hidden');
+        document.getElementById('progress-mode-title').textContent = '📊 Previous Scan Data Available';
+        updateProgressDisplay(data);
       }
     }).catch(() => {});
   </script>

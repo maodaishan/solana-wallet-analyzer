@@ -100,6 +100,27 @@ function loadScanMetadata() {
   }
 }
 
+function saveScanMetadata() {
+  try {
+    fs.writeFileSync(SCAN_METADATA_FILE, JSON.stringify(scanMetadata));
+  } catch (e) {
+    console.error('Failed to save scan-metadata:', e.message);
+  }
+}
+
+// Compute dataNewestTime from available state (migration for old data without this field)
+function getDataNewestTime() {
+  if (scanMetadata.dataNewestTime) return scanMetadata.dataNewestTime;
+  // Fallback: derive from webhook lastEventAt or scanStartBlockTime
+  if (webhookState.lastEventAt) {
+    return Math.floor(new Date(webhookState.lastEventAt).getTime() / 1000);
+  }
+  if (scanMetadata.scanStartBlockTime) {
+    return scanMetadata.scanStartBlockTime;
+  }
+  return null;
+}
+
 // Load all state on startup
 loadTradersData();
 loadWebhookState();
@@ -110,6 +131,10 @@ setInterval(() => {
   // During scanning, scanner owns traders.json — server should only read, not write
   if (!scannerProcess) {
     saveTradersData();
+    // Persist dataNewestTime if webhook has been updating it
+    if (scanMetadata.dataNewestTime) {
+      saveScanMetadata();
+    }
   }
   // Also reload scan-metadata in case scanner updated it
   loadScanMetadata();
@@ -249,7 +274,13 @@ function processWebhookTransaction(tx) {
   }
 
   webhookState.tradersUpdated++;
-  if (!scannerProcess) tradersDataDirty = true;
+  if (!scannerProcess) {
+    tradersDataDirty = true;
+    // Track newest data time for continue scan feature
+    if (blockTime > (scanMetadata.dataNewestTime || 0)) {
+      scanMetadata.dataNewestTime = blockTime;
+    }
+  }
 }
 
 // ============================================================
@@ -346,10 +377,11 @@ async function verifyWebhookRegistration() {
 function mergeScannedTraders() {
   if (!fs.existsSync(TRADERS_FILE)) return;
   try {
-    // Scanner data = complete historical scan (REPLACES old tradersData)
+    // Scanner data: in continue mode includes old+new traders; in normal mode is fresh scan
     const scannerTraders = JSON.parse(fs.readFileSync(TRADERS_FILE, 'utf8'));
+    const webhookCount = Object.keys(webhookScanAccumulator).length;
 
-    // Start from scanner data (replaces any previous data)
+    // Start from scanner data
     const merged = { ...scannerTraders };
 
     // Add ONLY webhook data from during this scan (non-overlapping time range)
@@ -368,7 +400,8 @@ function mergeScannedTraders() {
     tradersData = merged;
     webhookScanAccumulator = {}; // Clear accumulator
     tradersDataDirty = true;
-    console.log(`Merged: ${Object.keys(merged).length} traders (scanner) + ${Object.keys(webhookScanAccumulator).length} (webhook during scan)`);
+    saveTradersData();
+    console.log(`Merged: ${Object.keys(merged).length} traders (scanner) + ${webhookCount} (webhook during scan)`);
   } catch (e) {
     console.error('Failed to merge traders:', e.message);
     loadTradersData();
@@ -441,6 +474,10 @@ app.get('/api/progress', (req, res) => {
       progress.data.webhookLastEventAt = webhookState.lastEventAt;
     }
 
+    // Add data coverage info for continue scan feature
+    progress.dataNewestTime = getDataNewestTime();
+    progress.totalTraders = Object.keys(tradersData).length;
+
     res.json(progress);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -448,6 +485,7 @@ app.get('/api/progress', (req, res) => {
 });
 
 // API: Start scan (auto-registers webhook first, then starts historical scanner)
+// Body: { continue: true } to fill gap from last data point to now (instead of full rescan)
 app.post('/api/scan/start', async (req, res) => {
   if (scannerProcess) {
     return res.status(400).json({ error: 'Scan already running' });
@@ -462,6 +500,18 @@ app.post('/api/scan/start', async (req, res) => {
     return res.status(400).json({ error: 'Helius API key not configured' });
   }
 
+  const isContinue = req.body && req.body.continue === true;
+
+  // For continue mode: determine where the last data ends
+  let continueUntil = null;
+  if (isContinue) {
+    continueUntil = getDataNewestTime();
+    if (!continueUntil) {
+      return res.status(400).json({ error: 'No previous scan data found. Use a normal scan first.' });
+    }
+    console.log(`Continue scan: filling gap from ${new Date(continueUntil * 1000).toISOString()} to now`);
+  }
+
   // Step 1: Auto-register webhook (if webhookURL is configured)
   let webhookResult = null;
   if (config.webhookURL) {
@@ -471,7 +521,7 @@ app.post('/api/scan/start', async (req, res) => {
         console.error('Webhook registration failed:', webhookResult.error);
         // Continue without webhook — historical scan still works
       } else {
-        console.log('Webhook registered successfully, starting historical scan...');
+        console.log('Webhook registered successfully, starting scanner...');
       }
     } catch (e) {
       console.error('Webhook registration error:', e.message);
@@ -484,10 +534,16 @@ app.post('/api/scan/start', async (req, res) => {
   // During scan, webhook data goes to separate accumulator to avoid double-counting
   webhookScanAccumulator = {};
 
-  // Step 3: Start historical scanner
+  // Step 3: Start scanner with appropriate mode
+  const scannerEnv = { ...process.env };
+  if (isContinue) {
+    scannerEnv.SCAN_MODE = 'continue';
+    scannerEnv.CONTINUE_UNTIL = String(continueUntil);
+  }
+
   scannerProcess = spawn('node', ['scripts/scanner.js'], {
     cwd: __dirname,
-    env: { ...process.env }
+    env: scannerEnv,
   });
 
   scannerProcess.stdout.on('data', (data) => {
@@ -508,7 +564,7 @@ app.post('/api/scan/start', async (req, res) => {
     if (code === 0) {
       // Merge scanner results with webhook data
       mergeScannedTraders();
-      console.log('Historical scan complete. Webhook continues running.');
+      console.log('Scan complete. Webhook continues running.');
     } else {
       // Write error status
       try {
@@ -529,7 +585,8 @@ app.post('/api/scan/start', async (req, res) => {
 
   res.json({
     success: true,
-    message: 'Scan started',
+    message: isContinue ? 'Continue scan started' : 'Scan started',
+    scanMode: isContinue ? 'continue' : 'normal',
     webhookRegistered: webhookResult?.success || false,
   });
 });
@@ -576,6 +633,28 @@ app.post('/api/webhook/stop', async (req, res) => {
     await deleteWebhook(config);
     saveTradersData();
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Start webhook only (without starting a scan)
+app.post('/api/webhook/start', async (req, res) => {
+  try {
+    const config = loadConfig();
+    if (!config.heliusApiKey) {
+      return res.status(400).json({ error: 'Helius API key not configured' });
+    }
+    if (!config.webhookURL) {
+      return res.status(400).json({ error: 'Webhook URL not configured' });
+    }
+
+    const result = await registerWebhook(config);
+    if (result.error) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    res.json({ success: true, webhookId: result.webhookId });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

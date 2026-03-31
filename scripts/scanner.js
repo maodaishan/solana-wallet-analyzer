@@ -25,14 +25,37 @@ const DELAY_MS = config.delayMs || 40;
 const TARGET_RPS = config.targetRps || 45; // RPC calls per second
 const CHUNK_SIZE = config.chunkSize || 10; // concurrent RPC calls
 
+// Scan mode: 'normal' (scan last N days) or 'continue' (fill gap from last data point to now)
+const SCAN_MODE = process.env.SCAN_MODE || 'normal';
+const CONTINUE_UNTIL = process.env.CONTINUE_UNTIL ? parseInt(process.env.CONTINUE_UNTIL) : null;
+
 // Time calculations
 const scanStartTime = Date.now();
-const targetStartTime = Date.now() - (DAYS_TO_SCAN * 24 * 60 * 60 * 1000); // X days ago
+let targetStartTime;
 const scanEndTime = Date.now();
 
-console.log(`🔍 PumpFun Scanner Started`);
-console.log(`📅 Scanning last ${DAYS_TO_SCAN} days`);
-console.log(`🕐 Target range: ${new Date(targetStartTime).toLocaleString()} → ${new Date(scanEndTime).toLocaleString()}`);
+if (SCAN_MODE === 'continue' && CONTINUE_UNTIL) {
+  targetStartTime = CONTINUE_UNTIL * 1000; // convert blockTime (seconds) to ms
+  const gapDays = ((scanEndTime - targetStartTime) / 86400000).toFixed(2);
+  console.log(`🔍 PumpFun Scanner - CONTINUE MODE`);
+  console.log(`📅 Filling gap: ${gapDays} days (${new Date(targetStartTime).toLocaleString()} → ${new Date(scanEndTime).toLocaleString()})`);
+} else {
+  targetStartTime = Date.now() - (DAYS_TO_SCAN * 24 * 60 * 60 * 1000);
+  console.log(`🔍 PumpFun Scanner Started`);
+  console.log(`📅 Scanning last ${DAYS_TO_SCAN} days`);
+  console.log(`🕐 Target range: ${new Date(targetStartTime).toLocaleString()} → ${new Date(scanEndTime).toLocaleString()}`);
+}
+
+// For continue mode: load existing traders to merge into
+let existingTraders = {};
+if (SCAN_MODE === 'continue' && fs.existsSync(TRADERS_FILE)) {
+  try {
+    existingTraders = JSON.parse(fs.readFileSync(TRADERS_FILE, 'utf8'));
+    console.log(`📦 Loaded ${Object.keys(existingTraders).length} existing traders to merge into`);
+  } catch (e) {
+    console.log('⚠️ Failed to load existing traders, starting fresh');
+  }
+}
 
 // Helper
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
@@ -132,15 +155,16 @@ function saveProgress(state) {
 
   const currentBlockTime = state.currentBlockTime || Math.floor(now / 1000);
   const totalRangeSec = (scanEndTime - targetStartTime) / 1000;
+  const totalDays = totalRangeSec / 86400;
   const scannedSec = Math.max(0, Math.floor(now / 1000) - currentBlockTime); // seconds of blockchain scanned
   const daysScanned = scannedSec / 86400;
 
   // Use scan rate (blockchain days per real second) to estimate remaining
   const scanRateDaysPerSec = elapsedSec > 5 ? daysScanned / elapsedSec : 0;
-  const daysRemaining = Math.max(0, DAYS_TO_SCAN - daysScanned);
+  const daysRemaining = Math.max(0, totalDays - daysScanned);
   const remainingMs = scanRateDaysPerSec > 0 ? (daysRemaining / scanRateDaysPerSec) * 1000 : 0;
 
-  const timeProgressPercent = Math.min(100, Math.round(daysScanned / DAYS_TO_SCAN * 100));
+  const timeProgressPercent = Math.min(100, Math.round(daysScanned / totalDays * 100));
   const eta = (remainingMs > 0 && daysScanned > 0.01) ? new Date(now + remainingMs).toISOString() : null;
 
   const progressData = {
@@ -157,7 +181,7 @@ function saveProgress(state) {
 
     timeProgressPercent,
     daysScanned: parseFloat(daysScanned.toFixed(2)),
-    daysTotal: DAYS_TO_SCAN,
+    daysTotal: parseFloat(totalDays.toFixed(2)),
     elapsedMs,
     remainingMs: Math.min(remainingMs, 8640000000000000 - now - 1),
     eta,
@@ -174,21 +198,24 @@ function saveCheckpoint(state) {
     processed: state.processed,
     traders: state.traders,
     lastBlockTime: state.currentBlockTime,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    scanMode: SCAN_MODE,
+    targetStartTimeMs: targetStartTime,
   }));
 }
 
 async function main() {
   let state = {
     processed: 0,
-    traders: {},
+    traders: SCAN_MODE === 'continue' ? { ...existingTraders } : {},
     lastSig: null,
     startTime: new Date().toISOString(),
     scanStartRealTime: Date.now(),
     status: 'scanning',
-    currentBlockTime: Math.floor(Date.now() / 1000) // Initialize with current time
+    currentBlockTime: Math.floor(Date.now() / 1000), // Initialize with current time
+    scanMode: SCAN_MODE,
   };
-  
+
   // Write initial progress immediately so frontend knows scanner started
   saveProgress(state);
 
@@ -196,8 +223,18 @@ async function main() {
   if (fs.existsSync(CHECKPOINT_FILE)) {
     try {
       const checkpoint = JSON.parse(fs.readFileSync(CHECKPOINT_FILE, 'utf8'));
-      console.log(`📌 Resuming: ${checkpoint.processed} txs, ${Object.keys(checkpoint.traders).length} traders`);
-      state = { ...state, ...checkpoint, scanStartRealTime: Date.now() };
+      // Only use checkpoint if scan mode matches
+      if ((checkpoint.scanMode || 'normal') === SCAN_MODE) {
+        console.log(`📌 Resuming ${SCAN_MODE} scan: ${checkpoint.processed} txs, ${Object.keys(checkpoint.traders).length} traders`);
+        state = { ...state, ...checkpoint, scanStartRealTime: Date.now() };
+        // Restore targetStartTime from checkpoint if saved
+        if (checkpoint.targetStartTimeMs) {
+          targetStartTime = checkpoint.targetStartTimeMs;
+        }
+      } else {
+        console.log(`⚠️ Ignoring checkpoint from ${checkpoint.scanMode || 'normal'} scan (current: ${SCAN_MODE})`);
+        fs.unlinkSync(CHECKPOINT_FILE);
+      }
     } catch (e) {
       console.log('❌ Failed to load checkpoint, starting fresh');
     }
@@ -341,9 +378,11 @@ async function finalize(state, scanStartBlockTime) {
   console.log(`✅ Saved ${traderCount} traders (${profitable} profitable) to traders.json`);
 
   // Update scan-metadata to mark completion
+  // dataNewestTime = the most recent blockTime covered by our data (for future continue scans)
   fs.writeFileSync(SCAN_METADATA_FILE, JSON.stringify({
     isRunning: false,
     scanStartBlockTime: scanStartBlockTime || null,
+    dataNewestTime: scanStartBlockTime || Math.floor(Date.now() / 1000),
     completedAt: new Date().toISOString(),
   }));
 
