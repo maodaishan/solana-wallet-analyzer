@@ -918,7 +918,9 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ continue: true })
         });
-        const data = await res.json();
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { error: text || `Server error (HTTP ${res.status})` }; }
 
         if (data.error) {
           alert(data.error);

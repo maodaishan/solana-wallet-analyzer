@@ -487,108 +487,113 @@ app.get('/api/progress', (req, res) => {
 // API: Start scan (auto-registers webhook first, then starts historical scanner)
 // Body: { continue: true } to fill gap from last data point to now (instead of full rescan)
 app.post('/api/scan/start', async (req, res) => {
-  if (scannerProcess) {
-    return res.status(400).json({ error: 'Scan already running' });
-  }
-
-  if (!fs.existsSync(CONFIG_FILE)) {
-    return res.status(400).json({ error: 'Please configure Helius API key first' });
-  }
-
-  const config = loadConfig();
-  if (!config.heliusApiKey) {
-    return res.status(400).json({ error: 'Helius API key not configured' });
-  }
-
-  const isContinue = req.body && req.body.continue === true;
-
-  // For continue mode: determine where the last data ends
-  let continueUntil = null;
-  if (isContinue) {
-    continueUntil = getDataNewestTime();
-    if (!continueUntil) {
-      return res.status(400).json({ error: 'No previous scan data found. Use a normal scan first.' });
+  try {
+    if (scannerProcess) {
+      return res.status(400).json({ error: 'Scan already running' });
     }
-    console.log(`Continue scan: filling gap from ${new Date(continueUntil * 1000).toISOString()} to now`);
-  }
 
-  // Step 1: Auto-register webhook (if webhookURL is configured)
-  let webhookResult = null;
-  if (config.webhookURL) {
-    try {
-      webhookResult = await registerWebhook(config);
-      if (webhookResult.error) {
-        console.error('Webhook registration failed:', webhookResult.error);
-        // Continue without webhook — historical scan still works
-      } else {
-        console.log('Webhook registered successfully, starting scanner...');
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return res.status(400).json({ error: 'Please configure Helius API key first' });
+    }
+
+    const config = loadConfig();
+    if (!config.heliusApiKey) {
+      return res.status(400).json({ error: 'Helius API key not configured' });
+    }
+
+    const isContinue = req.body && req.body.continue === true;
+
+    // For continue mode: determine where the last data ends
+    let continueUntil = null;
+    if (isContinue) {
+      continueUntil = getDataNewestTime();
+      if (!continueUntil) {
+        return res.status(400).json({ error: 'No previous scan data found. Use a normal scan first.' });
       }
-    } catch (e) {
-      console.error('Webhook registration error:', e.message);
+      console.log(`Continue scan: filling gap from ${new Date(continueUntil * 1000).toISOString()} to now`);
     }
-  } else {
-    console.log('No webhookURL configured, running historical scan only');
-  }
 
-  // Step 2: Reset webhook accumulator for this scan
-  // During scan, webhook data goes to separate accumulator to avoid double-counting
-  webhookScanAccumulator = {};
-
-  // Step 3: Start scanner with appropriate mode
-  const scannerEnv = { ...process.env };
-  if (isContinue) {
-    scannerEnv.SCAN_MODE = 'continue';
-    scannerEnv.CONTINUE_UNTIL = String(continueUntil);
-  }
-
-  scannerProcess = spawn('node', ['scripts/scanner.js'], {
-    cwd: __dirname,
-    env: scannerEnv,
-  });
-
-  scannerProcess.stdout.on('data', (data) => {
-    console.log(`Scanner: ${data}`);
-  });
-
-  scannerProcess.stderr.on('data', (data) => {
-    console.error(`Scanner error: ${data}`);
-  });
-
-  scannerProcess.on('close', (code) => {
-    console.log(`Scanner exited with code ${code}`);
-    scannerProcess = null;
-
-    // Reload scan metadata
-    loadScanMetadata();
-
-    if (code === 0) {
-      // Merge scanner results with webhook data
-      mergeScannedTraders();
-      console.log('Scan complete. Webhook continues running.');
-    } else {
-      // Write error status
+    // Step 1: Auto-register webhook (if webhookURL is configured)
+    let webhookResult = null;
+    if (config.webhookURL) {
       try {
-        const existing = fs.existsSync(PROGRESS_FILE)
-          ? JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'))
-          : {};
-        if (existing.status !== 'complete' && existing.status !== 'completed') {
-          fs.writeFileSync(PROGRESS_FILE, JSON.stringify({
-            ...existing,
-            status: 'error',
-            error: `Scanner exited with code ${code}. Check your Helius API key.`,
-            lastUpdate: new Date().toISOString()
-          }, null, 2));
+        webhookResult = await registerWebhook(config);
+        if (webhookResult.error) {
+          console.error('Webhook registration failed:', webhookResult.error);
+          // Continue without webhook — historical scan still works
+        } else {
+          console.log('Webhook registered successfully, starting scanner...');
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('Webhook registration error:', e.message);
+      }
+    } else {
+      console.log('No webhookURL configured, running historical scan only');
     }
-  });
 
-  res.json({
-    success: true,
-    message: isContinue ? 'Continue scan started' : 'Scan started',
-    scanMode: isContinue ? 'continue' : 'normal',
-    webhookRegistered: webhookResult?.success || false,
-  });
+    // Step 2: Reset webhook accumulator for this scan
+    // During scan, webhook data goes to separate accumulator to avoid double-counting
+    webhookScanAccumulator = {};
+
+    // Step 3: Start scanner with appropriate mode
+    const scannerEnv = { ...process.env };
+    if (isContinue) {
+      scannerEnv.SCAN_MODE = 'continue';
+      scannerEnv.CONTINUE_UNTIL = String(continueUntil);
+    }
+
+    scannerProcess = spawn('node', ['scripts/scanner.js'], {
+      cwd: __dirname,
+      env: scannerEnv,
+    });
+
+    scannerProcess.stdout.on('data', (data) => {
+      console.log(`Scanner: ${data}`);
+    });
+
+    scannerProcess.stderr.on('data', (data) => {
+      console.error(`Scanner error: ${data}`);
+    });
+
+    scannerProcess.on('close', (code) => {
+      console.log(`Scanner exited with code ${code}`);
+      scannerProcess = null;
+
+      // Reload scan metadata
+      loadScanMetadata();
+
+      if (code === 0) {
+        // Merge scanner results with webhook data
+        mergeScannedTraders();
+        console.log('Scan complete. Webhook continues running.');
+      } else {
+        // Write error status
+        try {
+          const existing = fs.existsSync(PROGRESS_FILE)
+            ? JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'))
+            : {};
+          if (existing.status !== 'complete' && existing.status !== 'completed') {
+            fs.writeFileSync(PROGRESS_FILE, JSON.stringify({
+              ...existing,
+              status: 'error',
+              error: `Scanner exited with code ${code}. Check your Helius API key.`,
+              lastUpdate: new Date().toISOString()
+            }, null, 2));
+          }
+        } catch (e) {}
+      }
+    });
+
+    res.json({
+      success: true,
+      message: isContinue ? 'Continue scan started' : 'Scan started',
+      scanMode: isContinue ? 'continue' : 'normal',
+      webhookRegistered: webhookResult?.success || false,
+    });
+  } catch (e) {
+    console.error('Scan start error:', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // API: Stop scan (stops scanner process, optionally stops webhook)
