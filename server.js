@@ -110,16 +110,12 @@ function saveScanMetadata() {
   }
 }
 
-// Compute dataNewestTime from available state (migration for old data without this field)
+// Compute dataNewestTime from scan-metadata only (not webhook state, which may be from a new session)
 function getDataNewestTime() {
   if (scanMetadata.dataNewestTime) return scanMetadata.dataNewestTime;
-  // Fallback: derive from webhook lastEventAt or scanStartBlockTime
-  if (webhookState.lastEventAt) {
-    return Math.floor(new Date(webhookState.lastEventAt).getTime() / 1000);
-  }
-  if (scanMetadata.scanStartBlockTime) {
-    return scanMetadata.scanStartBlockTime;
-  }
+  // Fallback: scanStartBlockTime = newest point the historical scan covered
+  // Webhook data after this point is NOT tracked here — may cause some overlap on continue but won't miss data
+  if (scanMetadata.scanStartBlockTime) return scanMetadata.scanStartBlockTime;
   return null;
 }
 
