@@ -133,10 +133,6 @@ setInterval(() => {
   // During scanning, scanner owns traders.json — server should only read, not write
   if (!scannerProcess) {
     saveTradersData();
-    // Persist dataNewestTime if webhook has been updating it
-    if (scanMetadata.dataNewestTime) {
-      saveScanMetadata();
-    }
   }
   // Also reload scan-metadata in case scanner updated it
   loadScanMetadata();
@@ -278,10 +274,9 @@ function processWebhookTransaction(tx) {
   webhookState.tradersUpdated++;
   if (!scannerProcess) {
     tradersDataDirty = true;
-    // Track newest data time for continue scan feature
-    if (blockTime > (scanMetadata.dataNewestTime || 0)) {
-      scanMetadata.dataNewestTime = blockTime;
-    }
+    // NOTE: do NOT update dataNewestTime here — webhook data may have a gap
+    // before it. Only scanner completion updates dataNewestTime to maintain
+    // continuous coverage tracking.
   }
 }
 
