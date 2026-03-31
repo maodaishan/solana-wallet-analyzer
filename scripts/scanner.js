@@ -46,15 +46,10 @@ if (SCAN_MODE === 'continue' && CONTINUE_UNTIL) {
   console.log(`🕐 Target range: ${new Date(targetStartTime).toLocaleString()} → ${new Date(scanEndTime).toLocaleString()}`);
 }
 
-// For continue mode: load existing traders to merge into
-let existingTraders = {};
-if (SCAN_MODE === 'continue' && fs.existsSync(TRADERS_FILE)) {
-  try {
-    existingTraders = JSON.parse(fs.readFileSync(TRADERS_FILE, 'utf8'));
-    console.log(`📦 Loaded ${Object.keys(existingTraders).length} existing traders to merge into`);
-  } catch (e) {
-    console.log('⚠️ Failed to load existing traders, starting fresh');
-  }
+// In continue mode, scanner collects ONLY gap data.
+// Server handles merging with existing traders in memory (avoids OOM on low-memory VPS).
+if (SCAN_MODE === 'continue') {
+  console.log('📦 Continue mode: scanner will collect gap data only. Server merges with existing traders.');
 }
 
 // Helper
@@ -207,7 +202,7 @@ function saveCheckpoint(state) {
 async function main() {
   let state = {
     processed: 0,
-    traders: SCAN_MODE === 'continue' ? { ...existingTraders } : {},
+    traders: {},
     lastSig: null,
     startTime: new Date().toISOString(),
     scanStartRealTime: Date.now(),

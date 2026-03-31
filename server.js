@@ -31,6 +31,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 let tradersData = {};       // Raw trader stats: {address: {spent, received, txs, firstSeen, lastSeen}}
 let tradersDataDirty = false;
 let scannerProcess = null;
+let lastScanMode = 'normal'; // 'normal' or 'continue' — tracks current/last scan mode
 let webhookScanAccumulator = {};  // Webhook data during active scan (kept separate to avoid double-counting)
 
 let webhookState = {
@@ -377,14 +378,31 @@ async function verifyWebhookRegistration() {
 function mergeScannedTraders() {
   if (!fs.existsSync(TRADERS_FILE)) return;
   try {
-    // Scanner data: in continue mode includes old+new traders; in normal mode is fresh scan
     const scannerTraders = JSON.parse(fs.readFileSync(TRADERS_FILE, 'utf8'));
     const webhookCount = Object.keys(webhookScanAccumulator).length;
+    const scannerCount = Object.keys(scannerTraders).length;
 
-    // Start from scanner data
-    const merged = { ...scannerTraders };
+    let merged;
+    if (lastScanMode === 'continue') {
+      // Continue mode: scanner only has gap data — merge INTO existing in-memory traders
+      merged = { ...tradersData };
+      for (const [addr, sData] of Object.entries(scannerTraders)) {
+        if (!merged[addr]) {
+          merged[addr] = { ...sData };
+        } else {
+          merged[addr].spent += sData.spent;
+          merged[addr].received += sData.received;
+          merged[addr].txs += sData.txs;
+          merged[addr].firstSeen = Math.min(merged[addr].firstSeen || Infinity, sData.firstSeen || Infinity);
+          merged[addr].lastSeen = Math.max(merged[addr].lastSeen || 0, sData.lastSeen || 0);
+        }
+      }
+    } else {
+      // Normal mode: scanner has complete fresh scan — replace
+      merged = { ...scannerTraders };
+    }
 
-    // Add ONLY webhook data from during this scan (non-overlapping time range)
+    // Add webhook data from during this scan (non-overlapping time range)
     for (const [addr, wData] of Object.entries(webhookScanAccumulator)) {
       if (!merged[addr]) {
         merged[addr] = { ...wData };
@@ -401,7 +419,7 @@ function mergeScannedTraders() {
     webhookScanAccumulator = {}; // Clear accumulator
     tradersDataDirty = true;
     saveTradersData();
-    console.log(`Merged: ${Object.keys(merged).length} traders (scanner) + ${webhookCount} (webhook during scan)`);
+    console.log(`Merged (${lastScanMode}): ${Object.keys(merged).length} traders total (scanner: ${scannerCount} + webhook: ${webhookCount})`);
   } catch (e) {
     console.error('Failed to merge traders:', e.message);
     loadTradersData();
@@ -440,9 +458,10 @@ app.post('/api/config', (req, res) => {
 let lastTradersReload = 0;
 app.get('/api/wallets', (req, res) => {
   try {
-    // Reload traders from file during scanning, at most once per 30 seconds
+    // Reload traders from file during normal scanning, at most once per 30 seconds
+    // In continue mode, server already has full data in memory — don't reload partial gap data
     const now = Date.now();
-    if (scannerProcess && now - lastTradersReload > 30000) {
+    if (scannerProcess && lastScanMode !== 'continue' && now - lastTradersReload > 30000) {
       loadTradersData();
       lastTradersReload = now;
     }
@@ -534,6 +553,7 @@ app.post('/api/scan/start', async (req, res) => {
     // Step 2: Reset webhook accumulator for this scan
     // During scan, webhook data goes to separate accumulator to avoid double-counting
     webhookScanAccumulator = {};
+    lastScanMode = isContinue ? 'continue' : 'normal';
 
     // Step 3: Start scanner with appropriate mode
     const scannerEnv = { ...process.env };
