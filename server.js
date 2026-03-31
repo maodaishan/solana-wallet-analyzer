@@ -128,6 +128,10 @@ loadTradersData();
 loadWebhookState();
 loadScanMetadata();
 
+// Log data coverage on startup for visibility
+const startupNewest = getDataNewestTime();
+console.log(`📊 Data coverage: ${Object.keys(tradersData).length} traders, newest data: ${startupNewest ? new Date(startupNewest * 1000).toISOString() : 'unknown'}`);
+
 // Periodic persistence of webhook-accumulated trader data (every 60s)
 setInterval(() => {
   // During scanning, scanner owns traders.json — server should only read, not write
@@ -497,7 +501,9 @@ app.get('/api/progress', (req, res) => {
     }
 
     // Add data coverage info for continue scan feature
-    progress.dataNewestTime = getDataNewestTime();
+    const newestTime = getDataNewestTime();
+    progress.dataNewestTime = newestTime;
+    progress.dataNewestTimeFormatted = newestTime ? new Date(newestTime * 1000).toISOString() : null;
     progress.totalTraders = Object.keys(tradersData).length;
 
     res.json(progress);

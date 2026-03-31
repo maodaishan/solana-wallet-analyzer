@@ -771,12 +771,18 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
                <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Click "Continue Scan" to fill the gap and restart webhook, or "Restart Webhook" to only resume real-time monitoring.</div>
              </div>`;
 
-        // Show data coverage info
+        // Show data coverage info with gap indicator
         const dataNewestTime = progressData.dataNewestTime;
         const totalTraders = progressData.totalTraders || 0;
-        const coverageInfo = dataNewestTime
-          ? `<div style="color: #666; font-size: 0.85rem; margin-top: 8px;">Data coverage up to: ${new Date(dataNewestTime * 1000).toLocaleString()} | Total traders: ${totalTraders.toLocaleString()}</div>`
-          : '';
+        let coverageInfo = '';
+        if (dataNewestTime) {
+          const gapHours = ((Date.now() / 1000 - dataNewestTime) / 3600).toFixed(1);
+          const gapColor = gapHours > 1 ? '#ffa500' : '#14F195';
+          coverageInfo = `<div style="background: #0f0f0f; border: 1px solid #333; border-radius: 8px; padding: 10px; margin-top: 12px; font-size: 0.85rem;">
+            <div style="color: #888;">Scanned data up to: <span style="color: #e0e0e0;">${new Date(dataNewestTime * 1000).toLocaleString()}</span></div>
+            <div style="color: #888; margin-top: 4px;">Gap to now: <span style="color: ${gapColor}; font-weight: 500;">${gapHours}h</span> | Total traders: <span style="color: #e0e0e0;">${totalTraders.toLocaleString()}</span></div>
+          </div>`;
+        }
 
         display.innerHTML = `
           <div style="text-align: center; padding: 40px;">
