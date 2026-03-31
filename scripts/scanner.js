@@ -29,6 +29,7 @@ const CHUNK_SIZE = config.chunkSize || 10; // concurrent RPC calls
 // Scan mode: 'normal' (scan last N days) or 'continue' (fill gap from last data point to now)
 const SCAN_MODE = process.env.SCAN_MODE || 'normal';
 const CONTINUE_UNTIL = process.env.CONTINUE_UNTIL ? parseInt(process.env.CONTINUE_UNTIL) : null;
+console.log(`[DEBUG] SCAN_MODE=${SCAN_MODE}, CONTINUE_UNTIL=${CONTINUE_UNTIL}, DAYS_TO_SCAN=${DAYS_TO_SCAN}`);
 
 // Time calculations
 const scanStartTime = Date.now();

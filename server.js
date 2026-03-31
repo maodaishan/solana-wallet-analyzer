@@ -529,11 +529,13 @@ app.post('/api/scan/start', async (req, res) => {
     }
 
     const isContinue = req.body && req.body.continue === true;
+    console.log(`[DEBUG] /api/scan/start called. body=${JSON.stringify(req.body)}, isContinue=${isContinue}`);
 
     // For continue mode: determine where the last data ends
     let continueUntil = null;
     if (isContinue) {
       continueUntil = getDataNewestTime();
+      console.log(`[DEBUG] continueUntil=${continueUntil}, dataNewestTime=${scanMetadata.dataNewestTime}, webhookLastEvent=${webhookState.lastEventAt}, scanStartBlockTime=${scanMetadata.scanStartBlockTime}`);
       if (!continueUntil) {
         return res.status(400).json({ error: 'No previous scan data found. Use a normal scan first.' });
       }
@@ -569,6 +571,7 @@ app.post('/api/scan/start', async (req, res) => {
       scannerEnv.SCAN_MODE = 'continue';
       scannerEnv.CONTINUE_UNTIL = String(continueUntil);
     }
+    console.log(`[DEBUG] Spawning scanner: lastScanMode=${lastScanMode}, env.SCAN_MODE=${scannerEnv.SCAN_MODE || 'not set'}, env.CONTINUE_UNTIL=${scannerEnv.CONTINUE_UNTIL || 'not set'}`);
 
     scannerProcess = spawn('node', ['scripts/scanner.js'], {
       cwd: __dirname,
