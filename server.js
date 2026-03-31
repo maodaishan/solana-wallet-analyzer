@@ -24,7 +24,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // Middleware
 app.use(express.json({ limit: '10mb' })); // webhook payloads can be large
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0 }));
 
 // ============================================================
 // In-memory state
