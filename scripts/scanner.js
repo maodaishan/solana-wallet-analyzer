@@ -11,6 +11,7 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const PROGRESS_FILE = path.join(DATA_DIR, 'progress.json');
 const TRADERS_FILE = path.join(DATA_DIR, 'traders.json');
+const GAP_TRADERS_FILE = path.join(DATA_DIR, 'gap-traders.json');
 const CHECKPOINT_FILE = path.join(DATA_DIR, 'checkpoint.json');
 const SCAN_METADATA_FILE = path.join(DATA_DIR, 'scan-metadata.json');
 
@@ -314,9 +315,11 @@ async function main() {
             // Save checkpoint + intermediate traders data every 10000 txs
             if (state.processed % 10000 === 0) {
               saveCheckpoint(state);
-              const tmpFile = TRADERS_FILE + '.tmp';
+              // In continue mode, write to gap file to avoid overwriting main traders.json
+              const outFile = SCAN_MODE === 'continue' ? GAP_TRADERS_FILE : TRADERS_FILE;
+              const tmpFile = outFile + '.tmp';
               fs.writeFileSync(tmpFile, JSON.stringify(state.traders));
-              fs.renameSync(tmpFile, TRADERS_FILE);
+              fs.renameSync(tmpFile, outFile);
               console.log(`💾 Intermediate save: ${Object.keys(state.traders).length} traders`);
             }
           }
@@ -367,10 +370,13 @@ async function finalize(state, scanStartBlockTime) {
   const profitable = Object.values(state.traders).filter(t => t.received > t.spent).length;
 
   // Write raw traders data (atomic: write to .tmp then rename)
-  const tmpFile = TRADERS_FILE + '.tmp';
+  // In continue mode, write to gap file so we don't overwrite main traders.json
+  const outFile = SCAN_MODE === 'continue' ? GAP_TRADERS_FILE : TRADERS_FILE;
+  const tmpFile = outFile + '.tmp';
   fs.writeFileSync(tmpFile, JSON.stringify(state.traders));
-  fs.renameSync(tmpFile, TRADERS_FILE);
-  console.log(`✅ Saved ${traderCount} traders (${profitable} profitable) to traders.json`);
+  fs.renameSync(tmpFile, outFile);
+  const outName = SCAN_MODE === 'continue' ? 'gap-traders.json' : 'traders.json';
+  console.log(`✅ Saved ${traderCount} traders (${profitable} profitable) to ${outName}`);
 
   // Update scan-metadata to mark completion
   // dataNewestTime = the most recent blockTime covered by our data (for future continue scans)

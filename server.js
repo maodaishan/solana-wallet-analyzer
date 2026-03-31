@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const TRADERS_FILE = path.join(DATA_DIR, 'traders.json');
+const GAP_TRADERS_FILE = path.join(DATA_DIR, 'gap-traders.json');
 const PROGRESS_FILE = path.join(DATA_DIR, 'progress.json');
 const WEBHOOK_STATE_FILE = path.join(DATA_DIR, 'webhook-state.json');
 const SCAN_METADATA_FILE = path.join(DATA_DIR, 'scan-metadata.json');
@@ -376,29 +377,36 @@ async function verifyWebhookRegistration() {
 
 // Merge scanner traders with webhook data accumulated DURING this scan
 function mergeScannedTraders() {
-  if (!fs.existsSync(TRADERS_FILE)) return;
   try {
-    const scannerTraders = JSON.parse(fs.readFileSync(TRADERS_FILE, 'utf8'));
-    const webhookCount = Object.keys(webhookScanAccumulator).length;
-    const scannerCount = Object.keys(scannerTraders).length;
-
     let merged;
+    const webhookCount = Object.keys(webhookScanAccumulator).length;
+    let scannerCount = 0;
+
     if (lastScanMode === 'continue') {
-      // Continue mode: scanner only has gap data — merge INTO existing in-memory traders
-      merged = { ...tradersData };
-      for (const [addr, sData] of Object.entries(scannerTraders)) {
-        if (!merged[addr]) {
-          merged[addr] = { ...sData };
-        } else {
-          merged[addr].spent += sData.spent;
-          merged[addr].received += sData.received;
-          merged[addr].txs += sData.txs;
-          merged[addr].firstSeen = Math.min(merged[addr].firstSeen || Infinity, sData.firstSeen || Infinity);
-          merged[addr].lastSeen = Math.max(merged[addr].lastSeen || 0, sData.lastSeen || 0);
+      // Continue mode: scanner wrote gap-only data to gap-traders.json
+      merged = { ...tradersData }; // start from existing in-memory data (full)
+      if (fs.existsSync(GAP_TRADERS_FILE)) {
+        const gapTraders = JSON.parse(fs.readFileSync(GAP_TRADERS_FILE, 'utf8'));
+        scannerCount = Object.keys(gapTraders).length;
+        for (const [addr, sData] of Object.entries(gapTraders)) {
+          if (!merged[addr]) {
+            merged[addr] = { ...sData };
+          } else {
+            merged[addr].spent += sData.spent;
+            merged[addr].received += sData.received;
+            merged[addr].txs += sData.txs;
+            merged[addr].firstSeen = Math.min(merged[addr].firstSeen || Infinity, sData.firstSeen || Infinity);
+            merged[addr].lastSeen = Math.max(merged[addr].lastSeen || 0, sData.lastSeen || 0);
+          }
         }
+        // Clean up gap file
+        fs.unlinkSync(GAP_TRADERS_FILE);
       }
     } else {
-      // Normal mode: scanner has complete fresh scan — replace
+      // Normal mode: scanner wrote complete data to traders.json — replace
+      if (!fs.existsSync(TRADERS_FILE)) return;
+      const scannerTraders = JSON.parse(fs.readFileSync(TRADERS_FILE, 'utf8'));
+      scannerCount = Object.keys(scannerTraders).length;
       merged = { ...scannerTraders };
     }
 
