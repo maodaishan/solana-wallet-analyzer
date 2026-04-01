@@ -656,26 +656,30 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
     }
 
     async function startMode1Analysis() {
-      const wallets = uploadedWallets.length > 0 
-        ? uploadedWallets 
+      const wallets = uploadedWallets.length > 0
+        ? uploadedWallets
         : parseWallets(document.getElementById('user-wallets').value);
-      
+
       if (wallets.length === 0) {
         alert('Please upload a CSV file or paste wallet addresses');
         return;
       }
-      
+
       try {
         const res = await fetch('/api/analyze/wallets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ wallets })
         });
-        const data = await res.json();
-        
-        if (data.error) {
-          alert(data.error);
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { error: 'Invalid server response' }; }
+
+        if (!res.ok || data.error) {
+          alert(data.error || 'Server error: ' + res.status);
         } else {
+          // Clear old results immediately
+          displayWallets([]);
           // Move to progress step
           showProgressStep('📋 Analyzing Specified Wallets', 1);
           startProgressPolling();
@@ -696,16 +700,18 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       try {
         const res = await fetch('/api/analyze/resume', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
         });
-        const data = await res.json();
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { error: 'Invalid server response' }; }
 
-        if (data.error) {
-          alert(data.error);
-        } else {
-          showProgressStep('📋 Resuming Wallet Analysis', 1);
-          startProgressPolling();
+        if (!res.ok || data.error) {
+          alert(data.error || 'Server error: ' + res.status);
+          return;
         }
+
+        showProgressStep('📋 Resuming Wallet Analysis', 1);
+        startProgressPolling();
       } catch (e) {
         alert('Failed to resume analysis: ' + e.message);
       }
@@ -1277,7 +1283,9 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
     // Auto-resume polling if scan is already running, webhook is active, or previous scan completed
     fetch('/api/progress').then(r => r.json()).then(data => {
       if (data.isRunning) {
-        showProgressStep('🔍 Blockchain Discovery in Progress', 2);
+        const isMode1 = data.scanMode === 'mode1';
+        const title = isMode1 ? '📋 Analyzing Specified Wallets' : '🔍 Blockchain Discovery in Progress';
+        showProgressStep(title, isMode1 ? 1 : 2);
         startProgressPolling();
       } else if (data.mode1Resumable) {
         // Interrupted Mode 1 analysis — show resume prompt

@@ -470,12 +470,35 @@ app.post('/api/config', (req, res) => {
 
 // API: Get wallets (on-demand filtering from in-memory traders data)
 let lastTradersReload = 0;
+const WALLETS_FILE = path.join(DATA_DIR, 'wallets.json');
+
 app.get('/api/wallets', (req, res) => {
   try {
+    // Mode 1: serve per-wallet analysis results from wallets.json
+    if (lastScanMode === 'mode1') {
+      if (fs.existsSync(WALLETS_FILE)) {
+        const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
+        const results = wallets.map(w => ({
+          address: w.wallet_address,
+          totalTxs: w.txs || 0,
+          totalSpent: w.spent || 0,
+          totalReceived: w.received || 0,
+          totalProfit: w.pnl_sol || 0,
+          roi: (w.roi_pct || 0) / 100,
+          winrate: (w.winrate || 0) / 100,
+          walletAgeDays: w.wallet_age_days || 0,
+          balance: w.sol_balance || 0,
+        }));
+        return res.json(results);
+      }
+      return res.json([]);
+    }
+
+    // Mode 2: filter from in-memory trader data
     // Reload traders from file during normal scanning, at most once per 30 seconds
     // In continue mode, server already has full data in memory — don't reload partial gap data
     const now = Date.now();
-    if (scannerProcess && lastScanMode !== 'continue' && lastScanMode !== 'mode1' && now - lastTradersReload > 30000) {
+    if (scannerProcess && lastScanMode !== 'continue' && now - lastTradersReload > 30000) {
       loadTradersData();
       lastTradersReload = now;
     }
@@ -492,6 +515,7 @@ app.get('/api/progress', (req, res) => {
   try {
     const progress = {
       isRunning: scannerProcess !== null,
+      scanMode: lastScanMode,
       webhookActive: webhookState.status === 'active',
       data: {}
     };
@@ -859,9 +883,10 @@ app.post('/api/analyze/wallets', async (req, res) => {
       return res.status(400).json({ error: 'Helius API key not configured' });
     }
 
-    // Clear any previous checkpoint (fresh start)
+    // Clear any previous checkpoint and results (fresh start)
     const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
     if (fs.existsSync(mode1StateFile)) fs.unlinkSync(mode1StateFile);
+    if (fs.existsSync(WALLETS_FILE)) fs.unlinkSync(WALLETS_FILE);
 
     // Save wallet list for the analyzer script
     const userWalletsFile = path.join(DATA_DIR, 'user-wallets.json');
@@ -916,7 +941,15 @@ app.post('/api/analyze/resume', async (req, res) => {
       return res.status(400).json({ error: 'No interrupted analysis to resume' });
     }
 
-    const state = JSON.parse(fs.readFileSync(mode1StateFile, 'utf8'));
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(mode1StateFile, 'utf8'));
+    } catch (parseErr) {
+      // Corrupted state file — clean up and report
+      fs.unlinkSync(mode1StateFile);
+      return res.status(400).json({ error: 'Checkpoint file corrupted. Please start a new analysis.' });
+    }
+
     if (state.status !== 'running') {
       return res.status(400).json({ error: 'No interrupted analysis to resume' });
     }
