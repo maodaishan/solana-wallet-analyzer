@@ -265,6 +265,17 @@ async function main() {
       const skippedCount = sigs.length - successSigs.length;
       console.log(`📡 Processing ${successSigs.length} successful signatures (skipped ${skippedCount} failed/out-of-range txs)`);
 
+      // If ALL signatures are out-of-range, we've passed the target — stop immediately
+      if (successSigs.length === 0 && sigs.length > 0) {
+        const oldestBlockTime = sigs[sigs.length - 1].blockTime;
+        if (oldestBlockTime && oldestBlockTime < targetStartTime / 1000) {
+          console.log(`⏰ All signatures out of range, stopping. Oldest: ${new Date(oldestBlockTime * 1000).toLocaleString()}`);
+          state.status = 'completed';
+          saveProgress(state);
+          return await finalize(state, scanStartBlockTime);
+        }
+      }
+
       // Update currentBlockTime from sigs metadata (no extra RPC needed)
       const lastSigBlockTime = sigs[sigs.length - 1]?.blockTime;
       if (lastSigBlockTime) state.currentBlockTime = lastSigBlockTime;
