@@ -186,10 +186,27 @@ async function main() {
   const results = [];
   let totalCredits = 0;
   const nowSec = Date.now() / 1000;
+  const startTime = Date.now();
 
   for (let i = 0; i < userWallets.length; i++) {
     const wallet = userWallets[i];
     console.log(`\n[${i + 1}/${userWallets.length}] ${wallet.slice(0, 8)}...`);
+
+    // Save progress with current wallet info before starting analysis
+    const elapsedMs = Date.now() - startTime;
+    const avgMsPerWallet = i > 0 ? elapsedMs / i : 0;
+    const remainingMs = i > 0 ? avgMsPerWallet * (userWallets.length - i) : 0;
+    saveProgress({
+      status: 'analyzing',
+      processed: i,
+      total: userWallets.length,
+      currentWallet: wallet,
+      traders: results.filter(r => r.txs > 0).length,
+      profitable: results.filter(r => r.pnl_sol > 0).length,
+      estimatedCredits: totalCredits,
+      elapsedMs,
+      remainingMs,
+    });
 
     try {
       const { stats, totalSigs } = await analyzeWallet(wallet);
@@ -227,13 +244,19 @@ async function main() {
     }
 
     // Save progress after each wallet
+    const elapsedMsAfter = Date.now() - startTime;
+    const avgMsPerWalletAfter = elapsedMsAfter / (i + 1);
+    const remainingMsAfter = avgMsPerWalletAfter * (userWallets.length - i - 1);
     saveProgress({
       status: 'analyzing',
       processed: i + 1,
       total: userWallets.length,
+      currentWallet: i + 1 < userWallets.length ? userWallets[i + 1] : null,
       traders: results.filter(r => r.txs > 0).length,
       profitable: results.filter(r => r.pnl_sol > 0).length,
       estimatedCredits: totalCredits,
+      elapsedMs: elapsedMsAfter,
+      remainingMs: remainingMsAfter,
     });
   }
 

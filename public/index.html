@@ -787,9 +787,12 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         display.innerHTML = `
           <div style="text-align: center; padding: 40px;">
             <div style="font-size: 48px; margin-bottom: 15px;">✅</div>
-            <div style="color: #14F195; font-size: 18px; margin-bottom: 10px;">Scan Complete!</div>
+            <div style="color: #14F195; font-size: 18px; margin-bottom: 10px;">${data.total ? 'Analysis' : 'Scan'} Complete!</div>
             <div style="color: #888; margin-bottom: 5px;">Found ${data.profitable || 0} profitable wallets</div>
-            <div style="color: #666; font-size: 0.9rem;">Scanned ${(data.daysScanned || 0).toFixed(1)} / ${data.daysTotal || 30} days</div>
+            <div style="color: #666; font-size: 0.9rem;">${data.total
+              ? `Analyzed ${data.processed || data.total} / ${data.total} wallets | ~${(data.estimatedCredits || 0).toLocaleString()} credits used`
+              : `Scanned ${(data.daysScanned || 0).toFixed(1)} / ${data.daysTotal || 30} days`
+            }</div>
             ${coverageInfo}
             ${webhookInfo}
           </div>`;
@@ -806,7 +809,70 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         }
         loadWallets();
 
-      } else if (isRunning || data.status === "running" || data.status === "scanning" || data.status === "analyzing") {
+      } else if (data.status === "analyzing") {
+        // Mode 1: Per-wallet analysis progress
+        const processed = data.processed || 0;
+        const total = data.total || 0;
+        const traders = data.traders || 0;
+        const profitable = data.profitable || 0;
+        const credits = data.estimatedCredits || 0;
+        const elapsedMs = data.elapsedMs || 0;
+        const remainingMs = data.remainingMs || 0;
+        const currentWallet = data.currentWallet || null;
+        const pct = total > 0 ? Math.round(processed / total * 100) : 0;
+        const elapsedFormatted = formatDuration(elapsedMs);
+        const remainingFormatted = processed > 0 && remainingMs > 0 ? formatDuration(remainingMs) : "Calculating...";
+
+        const walletDisplay = currentWallet
+          ? `<div style="background: linear-gradient(135deg, #14F19515, #9945FF15); border: 1px solid #14F19530; border-radius: 8px; padding: 12px; margin-bottom: 15px; text-align: center;">
+               <div style="color: #14F195; font-weight: 500;">🔍 Analyzing Wallet ${processed + 1} / ${total}</div>
+               <div style="color: #888; font-size: 0.85rem; margin-top: 6px; font-family: monospace;">${currentWallet.slice(0, 6)}...${currentWallet.slice(-4)}</div>
+             </div>`
+          : '';
+
+        display.innerHTML = `
+          <div style="padding: 20px;">
+            <div style="margin-bottom: 20px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.85rem;">
+                <span style="color: #9945FF;">📋 ${processed} / ${total} wallets analyzed</span>
+                <span style="color: #14F195;">${pct}%</span>
+              </div>
+              <div style="background: #333; border-radius: 10px; overflow: hidden; height: 10px;">
+                <div style="background: linear-gradient(90deg, #9945FF, #14F195); height: 100%; width: ${Math.max(pct, 0.5)}%; transition: width 0.5s;"></div>
+              </div>
+            </div>
+            ${walletDisplay}
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; font-size: 0.85rem;">
+              <div style="text-align: center; background: #0f0f0f; padding: 10px; border-radius: 8px;">
+                <div style="color: #666; margin-bottom: 3px;">Elapsed</div>
+                <div style="color: #e0e0e0;">${elapsedFormatted}</div>
+              </div>
+              <div style="text-align: center; background: #0f0f0f; padding: 10px; border-radius: 8px;">
+                <div style="color: #666; margin-bottom: 3px;">Remaining</div>
+                <div style="color: #ffa500;">${remainingFormatted}</div>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; max-width: 600px; margin: 0 auto;">
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">Analyzed</div>
+                <div style="font-size: 20px; color: #14F195;">${processed} / ${total}</div>
+              </div>
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">With Activity</div>
+                <div style="font-size: 20px; color: #14F195;">${traders}</div>
+              </div>
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">Profitable</div>
+                <div style="font-size: 20px; color: #14F195;">${profitable}</div>
+              </div>
+              <div style="background: #0f0f0f; padding: 12px; border-radius: 8px; border: 1px solid #333; text-align: center;">
+                <div style="color: #9945FF; font-size: 0.8rem; margin-bottom: 4px;">Credits</div>
+                <div style="font-size: 20px; color: #14F195;">~${credits.toLocaleString()}</div>
+              </div>
+            </div>
+          </div>`;
+
+      } else if (isRunning || data.status === "running" || data.status === "scanning") {
         const processed = data.processed || 0;
         const traders = data.traders || 0;
         const profitable = data.profitable || 0;
