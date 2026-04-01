@@ -225,28 +225,39 @@ function loadConfig() {
 // Webhook transaction processing
 // ============================================================
 function processWebhookTransaction(tx) {
-  if (!tx || !tx.feePayer || !tx.timestamp) return;
+  // Support both raw and enhanced webhook formats
+  let trader, blockTime, solChange;
 
-  // Skip if scanner is running and this tx falls within scanner's range
-  if (scanMetadata.isRunning && scanMetadata.scanStartBlockTime
-      && tx.timestamp <= scanMetadata.scanStartBlockTime) {
+  if (tx.meta && tx.transaction) {
+    // Raw format (same as getTransaction RPC response)
+    if (!tx.blockTime || tx.meta.err) return;
+    blockTime = tx.blockTime;
+    const keys = tx.transaction.message.accountKeys;
+    const signers = Array.isArray(keys)
+      ? keys.filter(k => (typeof k === 'object' ? k.signer : false)).map(k => k.pubkey || k)
+      : [];
+    trader = signers[0] || (Array.isArray(keys) ? (keys[0]?.pubkey || keys[0]) : null);
+    if (!trader) return;
+    solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
+  } else if (tx.feePayer && tx.timestamp) {
+    // Enhanced format (legacy)
+    trader = tx.feePayer;
+    blockTime = tx.timestamp;
+    solChange = 0;
+    if (Array.isArray(tx.nativeTransfers)) {
+      for (const transfer of tx.nativeTransfers) {
+        if (transfer.toUserAccount === trader) solChange += (transfer.amount || 0) / 1e9;
+        if (transfer.fromUserAccount === trader) solChange -= (transfer.amount || 0) / 1e9;
+      }
+    }
+  } else {
     return;
   }
 
-  const trader = tx.feePayer;
-  const blockTime = tx.timestamp;
-
-  // Calculate net SOL change for the fee payer from nativeTransfers
-  let solChange = 0;
-  if (Array.isArray(tx.nativeTransfers)) {
-    for (const transfer of tx.nativeTransfers) {
-      if (transfer.toUserAccount === trader) {
-        solChange += (transfer.amount || 0) / 1e9;
-      }
-      if (transfer.fromUserAccount === trader) {
-        solChange -= (transfer.amount || 0) / 1e9;
-      }
-    }
+  // Skip if scanner is running and this tx falls within scanner's range
+  if (scanMetadata.isRunning && scanMetadata.scanStartBlockTime
+      && blockTime <= scanMetadata.scanStartBlockTime) {
+    return;
   }
 
   // During active scan: write to separate accumulator to avoid double-counting
@@ -306,7 +317,7 @@ async function registerWebhook(config) {
         webhookURL,
         transactionTypes: ['ANY'],
         accountAddresses: [PUMPFUN],
-        webhookType: 'enhanced',
+        webhookType: 'raw',
       }),
     }
   );
