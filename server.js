@@ -513,6 +513,24 @@ app.get('/api/progress', (req, res) => {
     progress.dataNewestTimeFormatted = newestTime ? new Date(newestTime * 1000).toISOString() : null;
     progress.totalTraders = Object.keys(tradersData).length;
 
+    // Check for resumable Mode 1 analysis
+    const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
+    if (!scannerProcess && fs.existsSync(mode1StateFile)) {
+      try {
+        const m1state = JSON.parse(fs.readFileSync(mode1StateFile, 'utf8'));
+        if (m1state.status === 'running') {
+          progress.mode1Resumable = true;
+          progress.mode1ResumeInfo = {
+            total: m1state.wallets.length,
+            completed: m1state.nextIndex,
+            remaining: m1state.wallets.length - m1state.nextIndex,
+            totalCredits: m1state.totalCredits || 0,
+            elapsedMs: m1state.elapsedMs || 0,
+          };
+        }
+      } catch (e) { /* ignore corrupt state file */ }
+    }
+
     res.json(progress);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -841,6 +859,10 @@ app.post('/api/analyze/wallets', async (req, res) => {
       return res.status(400).json({ error: 'Helius API key not configured' });
     }
 
+    // Clear any previous checkpoint (fresh start)
+    const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
+    if (fs.existsSync(mode1StateFile)) fs.unlinkSync(mode1StateFile);
+
     // Save wallet list for the analyzer script
     const userWalletsFile = path.join(DATA_DIR, 'user-wallets.json');
     fs.writeFileSync(userWalletsFile, JSON.stringify(walletList, null, 2));
@@ -869,6 +891,65 @@ app.post('/api/analyze/wallets', async (req, res) => {
     res.json({
       success: true,
       message: `Analyzing ${walletList.length} wallets. Check progress in Scanner tab.`
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Discard Mode 1 checkpoint
+app.post('/api/analyze/discard', (req, res) => {
+  const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
+  if (fs.existsSync(mode1StateFile)) fs.unlinkSync(mode1StateFile);
+  res.json({ success: true });
+});
+
+// API: Resume interrupted Mode 1 analysis
+app.post('/api/analyze/resume', async (req, res) => {
+  try {
+    if (scannerProcess) {
+      return res.status(400).json({ error: 'Analysis already running' });
+    }
+
+    const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
+    if (!fs.existsSync(mode1StateFile)) {
+      return res.status(400).json({ error: 'No interrupted analysis to resume' });
+    }
+
+    const state = JSON.parse(fs.readFileSync(mode1StateFile, 'utf8'));
+    if (state.status !== 'running') {
+      return res.status(400).json({ error: 'No interrupted analysis to resume' });
+    }
+
+    const config = loadConfig();
+    if (!config.heliusApiKey) {
+      return res.status(400).json({ error: 'Helius API key not configured' });
+    }
+
+    lastScanMode = 'mode1';
+
+    scannerProcess = spawn('node', ['scripts/analyze-wallets-v2.js'], {
+      cwd: __dirname,
+      env: { ...process.env, HELIUS_API_KEY: config.heliusApiKey }
+    });
+
+    scannerProcess.stdout.on('data', (data) => {
+      console.log(`Analyzer: ${data}`);
+    });
+
+    scannerProcess.stderr.on('data', (data) => {
+      console.error(`Analyzer error: ${data}`);
+    });
+
+    scannerProcess.on('close', (code) => {
+      console.log(`Analyzer exited with code ${code}`);
+      scannerProcess = null;
+    });
+
+    const remaining = state.wallets.length - state.nextIndex;
+    res.json({
+      success: true,
+      message: `Resuming analysis: ${remaining} wallets remaining (${state.nextIndex} already done)`
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

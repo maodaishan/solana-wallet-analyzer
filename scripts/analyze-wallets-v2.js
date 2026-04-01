@@ -17,6 +17,7 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const USER_WALLETS_FILE = path.join(DATA_DIR, 'user-wallets.json');
 const PROGRESS_FILE = path.join(DATA_DIR, 'progress.json');
 const WALLETS_FILE = path.join(DATA_DIR, 'wallets.json');
+const MODE1_STATE_FILE = path.join(DATA_DIR, 'mode1-state.json');
 
 // Load config
 const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -103,6 +104,21 @@ function saveProgress(state) {
   fs.writeFileSync(PROGRESS_FILE, JSON.stringify(state, null, 2));
 }
 
+function saveState(state) {
+  fs.writeFileSync(MODE1_STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function loadState() {
+  try {
+    if (fs.existsSync(MODE1_STATE_FILE)) {
+      return JSON.parse(fs.readFileSync(MODE1_STATE_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.log('Failed to load checkpoint:', e.message);
+  }
+  return null;
+}
+
 async function analyzeWallet(walletAddress) {
   const stats = { spent: 0, received: 0, txs: 0, firstSeen: null, lastSeen: null };
   let lastSig = null;
@@ -182,27 +198,55 @@ async function analyzeWallet(walletAddress) {
 async function main() {
   console.log('🔍 Per-Wallet Analyzer Started');
 
-  if (!fs.existsSync(USER_WALLETS_FILE)) {
-    console.error('No user wallets found');
-    process.exit(1);
+  // Check for resumable checkpoint
+  const checkpoint = loadState();
+  let userWallets, results, totalCredits, startIndex, prevElapsedMs;
+  const resuming = checkpoint && checkpoint.status === 'running' && checkpoint.nextIndex > 0;
+
+  if (resuming) {
+    userWallets = checkpoint.wallets;
+    results = checkpoint.results || [];
+    totalCredits = checkpoint.totalCredits || 0;
+    startIndex = checkpoint.nextIndex;
+    prevElapsedMs = checkpoint.elapsedMs || 0;
+    console.log(`🔄 Resuming from wallet ${startIndex + 1}/${userWallets.length} (${startIndex} already done, ${results.length} results)`);
+  } else {
+    if (!fs.existsSync(USER_WALLETS_FILE)) {
+      console.error('No user wallets found');
+      process.exit(1);
+    }
+    userWallets = JSON.parse(fs.readFileSync(USER_WALLETS_FILE, 'utf8'));
+    results = [];
+    totalCredits = 0;
+    startIndex = 0;
+    prevElapsedMs = 0;
   }
 
-  const userWallets = JSON.parse(fs.readFileSync(USER_WALLETS_FILE, 'utf8'));
-  console.log(`📋 Analyzing ${userWallets.length} wallets (per-wallet mode)`);
+  console.log(`📋 Analyzing ${userWallets.length} wallets (per-wallet mode)${resuming ? ' [RESUMED]' : ''}`);
 
-  const results = [];
-  let totalCredits = 0;
   const nowSec = Date.now() / 1000;
   const startTime = Date.now();
 
-  for (let i = 0; i < userWallets.length; i++) {
+  // Save initial state
+  saveState({
+    status: 'running',
+    wallets: userWallets,
+    nextIndex: startIndex,
+    results,
+    totalCredits,
+    elapsedMs: prevElapsedMs,
+    startedAt: resuming ? checkpoint.startedAt : Date.now(),
+  });
+
+  for (let i = startIndex; i < userWallets.length; i++) {
     const wallet = userWallets[i];
     console.log(`\n[${i + 1}/${userWallets.length}] ${wallet.slice(0, 8)}...`);
 
     // Save progress with current wallet info before starting analysis
-    const elapsedMs = Date.now() - startTime;
-    const avgMsPerWallet = i > 0 ? elapsedMs / i : 0;
-    const remainingMs = i > 0 ? avgMsPerWallet * (userWallets.length - i) : 0;
+    const elapsedMs = (Date.now() - startTime) + prevElapsedMs;
+    const walletsProcessedThisRun = i - startIndex;
+    const avgMsPerWallet = walletsProcessedThisRun > 0 ? (Date.now() - startTime) / walletsProcessedThisRun : 0;
+    const remainingMs = walletsProcessedThisRun > 0 ? avgMsPerWallet * (userWallets.length - i) : 0;
     saveProgress({
       status: 'analyzing',
       processed: i,
@@ -251,8 +295,9 @@ async function main() {
     }
 
     // Save progress after each wallet
-    const elapsedMsAfter = Date.now() - startTime;
-    const avgMsPerWalletAfter = elapsedMsAfter / (i + 1);
+    const elapsedMsAfter = (Date.now() - startTime) + prevElapsedMs;
+    const walletsProcessedAfter = i - startIndex + 1;
+    const avgMsPerWalletAfter = (Date.now() - startTime) / walletsProcessedAfter;
     const remainingMsAfter = avgMsPerWalletAfter * (userWallets.length - i - 1);
     saveProgress({
       status: 'analyzing',
@@ -265,11 +310,38 @@ async function main() {
       elapsedMs: elapsedMsAfter,
       remainingMs: remainingMsAfter,
     });
+
+    // Save checkpoint after each wallet for resume capability
+    saveState({
+      status: 'running',
+      wallets: userWallets,
+      nextIndex: i + 1,
+      results,
+      totalCredits,
+      elapsedMs: elapsedMsAfter,
+      startedAt: resuming ? checkpoint.startedAt : startTime,
+    });
+
+    // Save partial results so frontend can display them
+    const sortedPartial = [...results].sort((a, b) => b.pnl_sol - a.pnl_sol);
+    fs.writeFileSync(WALLETS_FILE, JSON.stringify(sortedPartial, null, 2));
   }
 
   // Sort by profit
   results.sort((a, b) => b.pnl_sol - a.pnl_sol);
   fs.writeFileSync(WALLETS_FILE, JSON.stringify(results, null, 2));
+
+  const finalElapsedMs = (Date.now() - startTime) + prevElapsedMs;
+
+  saveState({
+    status: 'complete',
+    wallets: userWallets,
+    nextIndex: userWallets.length,
+    results,
+    totalCredits,
+    elapsedMs: finalElapsedMs,
+    startedAt: resuming ? checkpoint.startedAt : startTime,
+  });
 
   saveProgress({
     status: 'complete',
