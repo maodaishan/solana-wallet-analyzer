@@ -475,7 +475,7 @@ app.get('/api/wallets', (req, res) => {
     // Reload traders from file during normal scanning, at most once per 30 seconds
     // In continue mode, server already has full data in memory — don't reload partial gap data
     const now = Date.now();
-    if (scannerProcess && lastScanMode !== 'continue' && now - lastTradersReload > 30000) {
+    if (scannerProcess && lastScanMode !== 'continue' && lastScanMode !== 'mode1' && now - lastTradersReload > 30000) {
       loadTradersData();
       lastTradersReload = now;
     }
@@ -844,6 +844,8 @@ app.post('/api/analyze/wallets', async (req, res) => {
     // Save wallet list for the analyzer script
     const userWalletsFile = path.join(DATA_DIR, 'user-wallets.json');
     fs.writeFileSync(userWalletsFile, JSON.stringify(walletList, null, 2));
+
+    lastScanMode = 'mode1';
 
     // Start the enhanced analyzer with user wallets
     scannerProcess = spawn('node', ['scripts/analyze-wallets-v2.js'], {
