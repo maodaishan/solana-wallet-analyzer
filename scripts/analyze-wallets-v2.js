@@ -109,12 +109,15 @@ async function analyzeWallet(walletAddress) {
   let totalSigs = 0;
 
   // Fetch all PumpFun-related signatures for this wallet
+  let page = 0;
   while (true) {
     const params = [walletAddress, { limit: 1000, ...(lastSig ? { before: lastSig } : {}) }];
     const sigs = await rpc('getSignaturesForAddress', params);
     if (!sigs || !sigs.length) break;
 
+    page++;
     totalSigs += sigs.length;
+    console.log(`    Page ${page}: ${sigs.length} sigs (total: ${totalSigs})`);
 
     // Filter: only successful transactions
     const successSigs = sigs.filter(s => s.err === null);
@@ -129,6 +132,10 @@ async function analyzeWallet(walletAddress) {
         params: [s.signature, { maxSupportedTransactionVersion: 0 }],
       }));
       const txs = await batchRpc(requests);
+
+      if ((i + CHUNK_SIZE) % 100 === 0 || i + CHUNK_SIZE >= successSigs.length) {
+        console.log(`    Fetched ${Math.min(i + CHUNK_SIZE, successSigs.length)}/${successSigs.length} txs, PumpFun: ${stats.txs}`);
+      }
 
       for (const tx of txs) {
         if (!tx) continue;
