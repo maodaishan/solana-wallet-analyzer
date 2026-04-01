@@ -27,6 +27,8 @@ const RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 const PUMPFUN = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const TARGET_RPS = config.targetRps || 10;
 const CHUNK_SIZE = config.chunkSize || 10;
+const DAYS_TO_SCAN = config.daysToScan || 30;
+const CUTOFF_TIME = Math.floor(Date.now() / 1000) - DAYS_TO_SCAN * 86400;
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -124,19 +126,26 @@ async function analyzeWallet(walletAddress) {
   let lastSig = null;
   let totalSigs = 0;
 
-  // Fetch all PumpFun-related signatures for this wallet
+  // Fetch signatures for this wallet (limited to DAYS_TO_SCAN)
   let page = 0;
+  let hitCutoff = false;
   while (true) {
     const params = [walletAddress, { limit: 1000, ...(lastSig ? { before: lastSig } : {}) }];
     const sigs = await rpc('getSignaturesForAddress', params);
     if (!sigs || !sigs.length) break;
 
+    // Filter out signatures older than cutoff (sigs are newest-first)
+    const recentSigs = sigs.filter(s => (s.blockTime || 0) >= CUTOFF_TIME);
+    if (recentSigs.length < sigs.length) hitCutoff = true;
+
     page++;
-    totalSigs += sigs.length;
-    console.log(`    Page ${page}: ${sigs.length} sigs (total: ${totalSigs})`);
+    totalSigs += recentSigs.length;
+    console.log(`    Page ${page}: ${recentSigs.length}/${sigs.length} sigs within ${DAYS_TO_SCAN}d (total: ${totalSigs})`);
+
+    if (recentSigs.length === 0) break;
 
     // Filter: only successful transactions
-    const successSigs = sigs.filter(s => s.err === null);
+    const successSigs = recentSigs.filter(s => s.err === null);
 
     // Batch fetch transactions
     for (let i = 0; i < successSigs.length; i += CHUNK_SIZE) {
@@ -186,6 +195,9 @@ async function analyzeWallet(walletAddress) {
       if (waitMs > 0) await delay(waitMs);
     }
 
+    // Stop if we've reached signatures older than cutoff
+    if (hitCutoff) break;
+
     lastSig = sigs[sigs.length - 1].signature;
 
     // If we got less than 1000, we've reached the end
@@ -222,7 +234,7 @@ async function main() {
     prevElapsedMs = 0;
   }
 
-  console.log(`📋 Analyzing ${userWallets.length} wallets (per-wallet mode)${resuming ? ' [RESUMED]' : ''}`);
+  console.log(`📋 Analyzing ${userWallets.length} wallets (per-wallet mode, last ${DAYS_TO_SCAN} days)${resuming ? ' [RESUMED]' : ''}`);
 
   const nowSec = Date.now() / 1000;
   const startTime = Date.now();
