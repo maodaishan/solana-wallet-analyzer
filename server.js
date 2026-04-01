@@ -537,39 +537,19 @@ app.post('/api/scan/start', async (req, res) => {
     }
 
     const isContinue = req.body && req.body.continue === true;
-    console.log(`[DEBUG] /api/scan/start called. body=${JSON.stringify(req.body)}, isContinue=${isContinue}`);
 
     // For continue mode: determine where the last data ends
     let continueUntil = null;
     if (isContinue) {
       continueUntil = getDataNewestTime();
-      console.log(`[DEBUG] continueUntil=${continueUntil}, dataNewestTime=${scanMetadata.dataNewestTime}, webhookLastEvent=${webhookState.lastEventAt}, scanStartBlockTime=${scanMetadata.scanStartBlockTime}`);
       if (!continueUntil) {
         return res.status(400).json({ error: 'No previous scan data found. Use a normal scan first.' });
       }
       console.log(`Continue scan: filling gap from ${new Date(continueUntil * 1000).toISOString()} to now`);
     }
 
-    // Step 1: Auto-register webhook (if webhookURL is configured)
-    let webhookResult = null;
-    if (config.webhookURL) {
-      try {
-        webhookResult = await registerWebhook(config);
-        if (webhookResult.error) {
-          console.error('Webhook registration failed:', webhookResult.error);
-          // Continue without webhook — historical scan still works
-        } else {
-          console.log('Webhook registered successfully, starting scanner...');
-        }
-      } catch (e) {
-        console.error('Webhook registration error:', e.message);
-      }
-    } else {
-      console.log('No webhookURL configured, running historical scan only');
-    }
-
-    // Step 2: Reset webhook accumulator for this scan
-    // During scan, webhook data goes to separate accumulator to avoid double-counting
+    // Webhook is not auto-registered during scan — it consumes credits (1/event).
+    // Use /api/webhook/start separately if needed.
     webhookScanAccumulator = {};
     lastScanMode = isContinue ? 'continue' : 'normal';
 
@@ -579,7 +559,8 @@ app.post('/api/scan/start', async (req, res) => {
       scannerEnv.SCAN_MODE = 'continue';
       scannerEnv.CONTINUE_UNTIL = String(continueUntil);
     }
-    console.log(`[DEBUG] Spawning scanner: lastScanMode=${lastScanMode}, env.SCAN_MODE=${scannerEnv.SCAN_MODE || 'not set'}, env.CONTINUE_UNTIL=${scannerEnv.CONTINUE_UNTIL || 'not set'}`);
+    console.log(`Starting scanner: mode=${lastScanMode}${isContinue ? ', gap from ' + new Date(continueUntil * 1000).toISOString() : ''}`);
+
 
     scannerProcess = spawn('node', ['scripts/scanner.js'], {
       cwd: __dirname,
@@ -602,9 +583,9 @@ app.post('/api/scan/start', async (req, res) => {
       loadScanMetadata();
 
       if (code === 0) {
-        // Merge scanner results with webhook data
+        // Merge scanner results with any webhook data accumulated during scan
         mergeScannedTraders();
-        console.log('Scan complete. Webhook continues running.');
+        console.log('Scan complete.');
       } else {
         // Write error status
         try {
@@ -627,7 +608,6 @@ app.post('/api/scan/start', async (req, res) => {
       success: true,
       message: isContinue ? 'Continue scan started' : 'Scan started',
       scanMode: isContinue ? 'continue' : 'normal',
-      webhookRegistered: webhookResult?.success || false,
     });
   } catch (e) {
     console.error('Scan start error:', e);
