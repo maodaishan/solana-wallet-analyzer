@@ -166,7 +166,22 @@
 <body>
   <div class="container">
     <h1>🚀 Solana Wallet Analyzer - Enhanced</h1>
-    
+
+    <div id="webhook-global-indicator" class="hidden" style="
+      background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
+      padding: 8px 16px; margin-bottom: 12px; display: flex;
+      align-items: center; justify-content: space-between; font-size: 13px;
+    ">
+      <span>
+        <span id="webhook-indicator-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px;"></span>
+        <span id="webhook-indicator-text"></span>
+      </span>
+      <button id="webhook-indicator-stop" class="hidden" onclick="stopWebhookFromIndicator()" style="
+        background: #ff4444; color: white; border: none; padding: 4px 12px;
+        border-radius: 4px; cursor: pointer; font-size: 12px;
+      ">Stop Webhook</button>
+    </div>
+
     <div class="tabs">
       <button class="tab active" onclick="switchTab('results', this)">📊 Results</button>
       <button class="tab" onclick="switchTab('scanner', this)">🔍 Scanner</button>
@@ -796,11 +811,11 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
                  Events: ${(data.webhookEventsReceived || 0).toLocaleString()} |
                  Traders updated: ${(data.webhookTradersUpdated || 0).toLocaleString()}
                </div>
-               <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Monitoring new PumpFun trades (zero credits). Results update automatically.</div>
+               <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Monitoring new PumpFun trades. Results update automatically.</div>
              </div>`
-          : `<div style="background: #ff6b6b15; border: 1px solid #ff6b6b30; border-radius: 8px; padding: 12px; margin-top: 15px;">
-               <div style="color: #ff6b6b; font-weight: 500;">📡 Webhook Inactive</div>
-               <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Click "Continue Scan" to fill the gap and restart webhook, or "Restart Webhook" to only resume real-time monitoring.</div>
+          : `<div style="background: #33333380; border: 1px solid #444; border-radius: 8px; padding: 12px; margin-top: 15px;">
+               <div style="color: #888; font-weight: 500;">Scan finished. No real-time monitoring.</div>
+               <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Use "Continue Scan" later to fill the time gap, or manually start Webhook for real-time monitoring.</div>
              </div>`;
 
         // Show data coverage info with gap indicator
@@ -1275,10 +1290,55 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       window.location.href = '/api/download/filtered?' + params.toString();
     }
 
+    // Global webhook status monitor
+    let webhookMonitorInterval;
+    function startWebhookMonitor() {
+      clearInterval(webhookMonitorInterval);
+      checkWebhookStatus();
+      webhookMonitorInterval = setInterval(checkWebhookStatus, 15000);
+    }
+
+    async function checkWebhookStatus() {
+      try {
+        const res = await fetch('/api/webhook/status');
+        const status = await res.json();
+        const indicator = document.getElementById('webhook-global-indicator');
+        const dot = document.getElementById('webhook-indicator-dot');
+        const text = document.getElementById('webhook-indicator-text');
+        const stopBtn = document.getElementById('webhook-indicator-stop');
+
+        if (status.status === 'active' && status.webhookId) {
+          indicator.classList.remove('hidden');
+          indicator.style.display = 'flex';
+          dot.style.background = '#14F195';
+          dot.style.boxShadow = '0 0 6px #14F195';
+          const events = (status.eventsReceived || 0).toLocaleString();
+          const lastTime = status.lastEventAt ? new Date(status.lastEventAt).toLocaleTimeString() : '-';
+          text.innerHTML = `Webhook <b style="color:#14F195">ACTIVE</b> | Events: ${events} | Last: ${lastTime}`;
+          stopBtn.classList.remove('hidden');
+        } else {
+          indicator.classList.add('hidden');
+          indicator.style.display = '';
+          stopBtn.classList.add('hidden');
+        }
+      } catch (e) {}
+    }
+
+    async function stopWebhookFromIndicator() {
+      if (!confirm('Stop the webhook? It will no longer receive real-time PumpFun transactions.')) return;
+      try {
+        await fetch('/api/webhook/stop', { method: 'POST' });
+        checkWebhookStatus();
+      } catch (e) {
+        alert('Failed to stop webhook: ' + e.message);
+      }
+    }
+
     // Initialize
     loadWallets();
     updateScannerDisplay();
     loadConfig();
+    startWebhookMonitor();
 
     // Auto-resume polling if scan is already running, webhook is active, or previous scan completed
     fetch('/api/progress').then(r => r.json()).then(data => {

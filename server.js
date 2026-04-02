@@ -358,6 +358,44 @@ async function deleteWebhook(config) {
   saveWebhookState();
 }
 
+// Delete ALL webhooks registered under this API key at Helius
+// This catches webhooks created by other instances (VPS, dashboard, etc.)
+async function deleteAllWebhooks(config) {
+  if (!config.heliusApiKey) return 0;
+  try {
+    const response = await fetch(
+      `https://api.helius.xyz/v0/webhooks?api-key=${config.heliusApiKey}`
+    );
+    const webhooks = await response.json();
+    if (!Array.isArray(webhooks) || webhooks.length === 0) {
+      console.log('No webhooks found at Helius');
+      webhookState.status = 'inactive';
+      webhookState.webhookId = null;
+      saveWebhookState();
+      return 0;
+    }
+    console.log(`Found ${webhooks.length} webhook(s) at Helius — deleting all`);
+    for (const wh of webhooks) {
+      try {
+        await fetch(
+          `https://api.helius.xyz/v0/webhooks/${wh.webhookID}?api-key=${config.heliusApiKey}`,
+          { method: 'DELETE' }
+        );
+        console.log(`  Deleted webhook ${wh.webhookID}`);
+      } catch (e) {
+        console.error(`  Failed to delete webhook ${wh.webhookID}: ${e.message}`);
+      }
+    }
+    webhookState.status = 'inactive';
+    webhookState.webhookId = null;
+    saveWebhookState();
+    return webhooks.length;
+  } catch (e) {
+    console.error('Failed to list webhooks from Helius:', e.message);
+    return 0;
+  }
+}
+
 async function verifyWebhookRegistration() {
   if (webhookState.status !== 'active' || !webhookState.webhookId) return;
   try {
@@ -458,10 +496,20 @@ app.get('/api/config', (req, res) => {
 });
 
 // API: Save config
-app.post('/api/config', (req, res) => {
+app.post('/api/config', async (req, res) => {
   try {
-    const config = req.body;
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    const newConfig = req.body;
+    const oldConfig = loadConfig();
+
+    // If webhookURL was cleared or changed, delete the old webhook at Helius
+    if (oldConfig.webhookURL && oldConfig.webhookURL !== newConfig.webhookURL) {
+      if (webhookState.webhookId && webhookState.status === 'active') {
+        console.log('Webhook URL changed/cleared — deleting old webhook at Helius');
+        await deleteWebhook(oldConfig);
+      }
+    }
+
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -590,19 +638,23 @@ app.post('/api/scan/start', async (req, res) => {
       console.log(`Continue scan: filling gap from ${new Date(continueUntil * 1000).toISOString()} to now`);
     }
 
-    // Webhook is not auto-registered during scan — it consumes credits (1/event).
-    // Use /api/webhook/start separately if needed.
+    // Check if webhook is active — determines whether we merge webhook data after scan
+    const webhookActiveAtStart = webhookState.status === 'active' && !!webhookState.webhookId;
     webhookScanAccumulator = {};
     lastScanMode = isContinue ? 'continue' : 'normal';
 
-    // Step 3: Start scanner with appropriate mode
+    if (webhookActiveAtStart) {
+      console.log(`Starting scanner: mode=${lastScanMode}, webhook ACTIVE — will merge real-time data after scan`);
+    } else {
+      console.log(`Starting scanner: mode=${lastScanMode}, webhook OFF — scan only, no real-time monitoring`);
+    }
+
+    // Start scanner with appropriate mode
     const scannerEnv = { ...process.env };
     if (isContinue) {
       scannerEnv.SCAN_MODE = 'continue';
       scannerEnv.CONTINUE_UNTIL = String(continueUntil);
     }
-    console.log(`Starting scanner: mode=${lastScanMode}${isContinue ? ', gap from ' + new Date(continueUntil * 1000).toISOString() : ''}`);
-
 
     scannerProcess = spawn('node', ['scripts/scanner.js'], {
       cwd: __dirname,
@@ -625,9 +677,15 @@ app.post('/api/scan/start', async (req, res) => {
       loadScanMetadata();
 
       if (code === 0) {
-        // Merge scanner results with any webhook data accumulated during scan
-        mergeScannedTraders();
-        console.log('Scan complete.');
+        if (webhookActiveAtStart) {
+          // Webhook was active: merge scanner data + webhook accumulated data
+          mergeScannedTraders();
+          console.log('Scan complete. Webhook data merged. Real-time monitoring continues.');
+        } else {
+          // No webhook: just load scanner data, no merge needed
+          mergeScannedTraders();
+          console.log('Scan complete. No webhook — scan-only mode finished.');
+        }
       } else {
         // Write error status
         try {
@@ -650,6 +708,7 @@ app.post('/api/scan/start', async (req, res) => {
       success: true,
       message: isContinue ? 'Continue scan started' : 'Scan started',
       scanMode: isContinue ? 'continue' : 'normal',
+      webhookActive: webhookActiveAtStart,
     });
   } catch (e) {
     console.error('Scan start error:', e);
@@ -883,6 +942,10 @@ app.post('/api/analyze/wallets', async (req, res) => {
       return res.status(400).json({ error: 'Helius API key not configured' });
     }
 
+    // Mode 1 does not need webhook — delete ALL webhooks at Helius to save credits
+    // Queries Helius API directly, so it catches webhooks from any source (VPS, dashboard, etc.)
+    await deleteAllWebhooks(config);
+
     // Clear any previous checkpoint and results (fresh start)
     const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
     if (fs.existsSync(mode1StateFile)) fs.unlinkSync(mode1StateFile);
@@ -958,6 +1021,9 @@ app.post('/api/analyze/resume', async (req, res) => {
     if (!config.heliusApiKey) {
       return res.status(400).json({ error: 'Helius API key not configured' });
     }
+
+    // Mode 1 does not need webhook — delete ALL webhooks at Helius to save credits
+    await deleteAllWebhooks(config);
 
     lastScanMode = 'mode1';
 
