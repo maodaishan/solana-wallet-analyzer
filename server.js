@@ -520,29 +520,45 @@ app.post('/api/config', async (req, res) => {
 let lastTradersReload = 0;
 const WALLETS_FILE = path.join(DATA_DIR, 'wallets.json');
 
+// Get filtered results for either mode
+function getFilteredResults(config) {
+  if (lastScanMode === 'mode1') {
+    if (!fs.existsSync(WALLETS_FILE)) return [];
+    const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
+    const filters = {
+      minTxs: config.minTxs || 10,
+      minWinrate: config.minWinrate || 0.4,
+      minRoi: config.minRoi || 0.5,
+      minProfit: config.minProfit || 10,
+      minWalletAge: config.minWalletAge || 0,
+    };
+    return wallets
+      .map(w => ({
+        address: w.wallet_address,
+        totalTxs: w.txs || 0,
+        totalSpent: w.spent || 0,
+        totalReceived: w.received || 0,
+        totalProfit: w.pnl_sol || 0,
+        roi: (w.roi_pct || 0) / 100,
+        winrate: (w.winrate || 0) / 100,
+        walletAgeDays: w.wallet_age_days || 0,
+        balance: w.sol_balance || 0,
+      }))
+      .filter(w =>
+        w.totalTxs >= filters.minTxs &&
+        w.roi >= filters.minRoi &&
+        w.winrate >= filters.minWinrate &&
+        w.totalProfit >= filters.minProfit &&
+        w.walletAgeDays >= filters.minWalletAge
+      )
+      .sort((a, b) => b.totalProfit - a.totalProfit);
+  }
+  // Mode 2: filter from in-memory trader data
+  return filterTraders(config);
+}
+
 app.get('/api/wallets', (req, res) => {
   try {
-    // Mode 1: serve per-wallet analysis results from wallets.json
-    if (lastScanMode === 'mode1') {
-      if (fs.existsSync(WALLETS_FILE)) {
-        const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
-        const results = wallets.map(w => ({
-          address: w.wallet_address,
-          totalTxs: w.txs || 0,
-          totalSpent: w.spent || 0,
-          totalReceived: w.received || 0,
-          totalProfit: w.pnl_sol || 0,
-          roi: (w.roi_pct || 0) / 100,
-          winrate: (w.winrate || 0) / 100,
-          walletAgeDays: w.wallet_age_days || 0,
-          balance: w.sol_balance || 0,
-        }));
-        return res.json(results);
-      }
-      return res.json([]);
-    }
-
-    // Mode 2: filter from in-memory trader data
     // Reload traders from file during normal scanning, at most once per 30 seconds
     // In continue mode, server already has full data in memory — don't reload partial gap data
     const now = Date.now();
@@ -551,7 +567,7 @@ app.get('/api/wallets', (req, res) => {
       lastTradersReload = now;
     }
     const config = loadConfig();
-    const results = filterTraders(config);
+    const results = getFilteredResults(config);
     res.json(results);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -852,7 +868,7 @@ app.post('/api/webhook/helius', (req, res) => {
 app.get('/api/status', (req, res) => {
   try {
     const config = loadConfig();
-    const results = filterTraders(config);
+    const results = getFilteredResults(config);
     res.json({
       lastUpdate: new Date().toISOString(),
       walletCount: results.length,
@@ -869,7 +885,7 @@ app.get('/api/status', (req, res) => {
 app.get('/api/download/wallets', (req, res) => {
   try {
     const config = loadConfig();
-    const results = filterTraders(config);
+    const results = getFilteredResults(config);
     if (results.length === 0) {
       return res.status(404).json({ error: 'No wallets found' });
     }
@@ -886,7 +902,7 @@ app.get('/api/download/wallets', (req, res) => {
 app.get('/api/download/filtered', (req, res) => {
   try {
     const config = loadConfig();
-    let results = filterTraders(config);
+    let results = getFilteredResults(config);
 
     // Apply additional frontend filters from query params
     const minProfit = parseFloat(req.query.minProfit) || 0;
