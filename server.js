@@ -32,7 +32,21 @@ app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0 
 let tradersData = {};       // Raw trader stats: {address: {spent, received, txs, firstSeen, lastSeen}}
 let tradersDataDirty = false;
 let scannerProcess = null;
-let lastScanMode = 'normal'; // 'normal' or 'continue' — tracks current/last scan mode
+// Detect last scan mode from data files so it survives server restarts
+let lastScanMode = (function() {
+  const mode1State = path.join(DATA_DIR, 'mode1-state.json');
+  const walletsFile = path.join(DATA_DIR, 'wallets.json');
+  // If mode1-state exists (running or complete), or wallets.json exists (Mode 1 results), it was Mode 1
+  try {
+    if (fs.existsSync(mode1State)) return 'mode1';
+    if (fs.existsSync(walletsFile)) {
+      const data = JSON.parse(fs.readFileSync(walletsFile, 'utf8'));
+      // wallets.json from Mode 1 is an array with wallet_address field
+      if (Array.isArray(data) && data.length > 0 && data[0].wallet_address) return 'mode1';
+    }
+  } catch (e) {}
+  return 'normal';
+})();
 let webhookScanAccumulator = {};  // Webhook data during active scan (kept separate to avoid double-counting)
 
 let webhookState = {
