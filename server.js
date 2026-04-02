@@ -193,11 +193,11 @@ scheduleDailyPrune();
 // ============================================================
 function filterTraders(config) {
   const filters = {
-    minTxs: config.minTxs || 10,
-    minWinrate: config.minWinrate || 0.4,
-    minRoi: config.minRoi || 0.5,
-    minProfit: config.minProfit || 10,
-    minWalletAge: config.minWalletAge || 0,
+    minTxs: config.minTxs ?? 10,
+    minWinrate: config.minWinrate ?? 0.4,
+    minRoi: config.minRoi ?? 0.5,
+    minProfit: config.minProfit ?? 10,
+    minWalletAge: config.minWalletAge ?? 0,
   };
 
   const nowSec = Date.now() / 1000;
@@ -540,11 +540,11 @@ function getFilteredResults(config) {
     if (!fs.existsSync(WALLETS_FILE)) return [];
     const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
     const filters = {
-      minTxs: config.minTxs || 10,
-      minWinrate: config.minWinrate || 0.4,
-      minRoi: config.minRoi || 0.5,
-      minProfit: config.minProfit || 10,
-      minWalletAge: config.minWalletAge || 0,
+      minTxs: config.minTxs ?? 10,
+      minWinrate: config.minWinrate ?? 0.4,
+      minRoi: config.minRoi ?? 0.5,
+      minProfit: config.minProfit ?? 10,
+      minWalletAge: config.minWalletAge ?? 0,
     };
     return wallets
       .map(w => ({
