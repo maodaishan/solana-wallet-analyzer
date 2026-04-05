@@ -88,14 +88,19 @@ async function batchRpc(requests, retries = 5) {
   }
 }
 
+function getAllAccounts(tx) {
+  const keys = tx.transaction?.message?.accountKeys || [];
+  const staticKeys = Array.isArray(keys) ? keys.map(k => k.pubkey || k) : [];
+  const loadedW = tx.meta?.loadedAddresses?.writable || [];
+  const loadedR = tx.meta?.loadedAddresses?.readonly || [];
+  return [...staticKeys, ...loadedW, ...loadedR];
+}
+
 function extractTrade(tx, walletAddress) {
   if (!tx || !tx.blockTime || tx.meta?.err) return null;
-  const keys = tx.transaction.message.accountKeys;
-  const accounts = Array.isArray(keys)
-    ? keys.map(k => k.pubkey || k)
-    : [];
+  const allAccounts = getAllAccounts(tx);
 
-  const walletIndex = accounts.indexOf(walletAddress);
+  const walletIndex = allAccounts.indexOf(walletAddress);
   if (walletIndex === -1) return null;
 
   const solChange = (tx.meta.postBalances[walletIndex] - tx.meta.preBalances[walletIndex]) / 1e9;
@@ -165,10 +170,9 @@ async function analyzeWallet(walletAddress) {
       for (const tx of txs) {
         if (!tx) continue;
 
-        // Check if this transaction involves PumpFun
-        const keys = tx.transaction?.message?.accountKeys || [];
-        const accounts = Array.isArray(keys) ? keys.map(k => k.pubkey || k) : [];
-        if (!accounts.includes(PUMPFUN)) continue;
+        // Check if this transaction involves PumpFun (static keys + ALT loaded addresses)
+        const allAccounts = getAllAccounts(tx);
+        if (!allAccounts.includes(PUMPFUN)) continue;
 
         const trade = extractTrade(tx, walletAddress);
         if (!trade) continue;
