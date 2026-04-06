@@ -115,38 +115,57 @@ async function batchRpc(requests, retries = 5) {
       await delay(attempt * 2000);
     }
   }
+  throw new Error('batchRpc: all retries exhausted');
 }
 
 // Fetch transactions for a chunk of signatures, with batch fallback
 async function fetchTransactions(sigs) {
-  if (batchSupported === false) {
-    // Use individual requests
-    const results = [];
-    for (const sig of sigs) {
-      const tx = await rpc('getTransaction', [sig, { maxSupportedTransactionVersion: 0 }]);
-      results.push(tx);
+  // If batch not supported (or unknown on free plan), use individual requests
+  if (batchSupported !== true) {
+    if (batchSupported === null) {
+      // First call: probe batch support with a quick test
+      try {
+        const body = [{ jsonrpc: '2.0', id: 0, method: 'getHealth', params: [] }];
+        const res = await fetch(RPC_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          batchSupported = true;
+          console.log('  Batch RPC: supported (paid plan)');
+        } else {
+          batchSupported = false;
+          console.log('  Batch RPC: not supported (free plan), using individual requests');
+        }
+      } catch (e) {
+        batchSupported = false;
+        console.log('  Batch RPC: probe failed, using individual requests');
+      }
     }
-    return results;
-  }
 
-  try {
-    const requests = sigs.map(sig => ({
-      method: 'getTransaction',
-      params: [sig, { maxSupportedTransactionVersion: 0 }],
-    }));
-    return await batchRpc(requests);
-  } catch (e) {
-    if (e.message === 'BATCH_NOT_SUPPORTED') {
-      // Fallback to individual
+    if (batchSupported !== true) {
       const results = [];
       for (const sig of sigs) {
-        const tx = await rpc('getTransaction', [sig, { maxSupportedTransactionVersion: 0 }]);
-        results.push(tx);
+        try {
+          const tx = await rpc('getTransaction', [sig, { maxSupportedTransactionVersion: 0 }]);
+          results.push(tx);
+        } catch (e) {
+          if (e.message === 'CREDITS_EXHAUSTED') throw e;
+          results.push(null);
+        }
       }
       return results;
     }
-    throw e;
   }
+
+  // Batch mode
+  const requests = sigs.map(sig => ({
+    method: 'getTransaction',
+    params: [sig, { maxSupportedTransactionVersion: 0 }],
+  }));
+  return await batchRpc(requests);
 }
 
 // ============================================================
@@ -168,8 +187,12 @@ function extractTokenChanges(tx, walletAddress) {
   const walletIndex = allAccounts.indexOf(walletAddress);
   if (walletIndex === -1) return null;
 
-  // SOL change
-  const solChange = (tx.meta.postBalances[walletIndex] - tx.meta.preBalances[walletIndex]) / 1e9;
+  // SOL change (subtract fee to get pure trade amount)
+  const rawSolChange = (tx.meta.postBalances[walletIndex] - tx.meta.preBalances[walletIndex]) / 1e9;
+  // Fee is paid by first signer (index 0). If our wallet is the fee payer, add fee back.
+  const fee = (tx.meta.fee || 0) / 1e9;
+  const isFeePayer = walletIndex === 0;
+  const solChange = isFeePayer ? rawSolChange + fee : rawSolChange;
 
   // Token changes
   const pre = tx.meta.preTokenBalances || [];
@@ -450,6 +473,10 @@ async function analyzeWallet(walletAddress) {
       const chunkStart = Date.now();
 
       const txs = await fetchTransactions(chunk.map(s => s.signature));
+      if (!Array.isArray(txs)) {
+        console.log(`    Warning: fetchTransactions returned non-array:`, typeof txs);
+        continue;
+      }
 
       for (const tx of txs) {
         const record = extractTokenChanges(tx, walletAddress);
