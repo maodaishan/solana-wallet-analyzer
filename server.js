@@ -32,16 +32,27 @@ app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0 
 let tradersData = {};       // Raw trader stats: {address: {spent, received, txs, firstSeen, lastSeen}}
 let tradersDataDirty = false;
 let scannerProcess = null;
+let deepAnalyzeProcess = null;
+
+const DEEP_STATE_FILE = path.join(DATA_DIR, 'deep-state.json');
+const DEEP_PROGRESS_FILE = path.join(DATA_DIR, 'deep-progress.json');
+const WALLETS_FILE = path.join(DATA_DIR, 'wallets.json');
+const USER_WALLETS_FILE = path.join(DATA_DIR, 'user-wallets.json');
 // Detect last scan mode from data files so it survives server restarts
 let lastScanMode = (function() {
   const mode1State = path.join(DATA_DIR, 'mode1-state.json');
+  const deepState = path.join(DATA_DIR, 'deep-state.json');
   const walletsFile = path.join(DATA_DIR, 'wallets.json');
-  // If mode1-state exists (running or complete), or wallets.json exists (Mode 1 results), it was Mode 1
   try {
+    // Check deep-state for mode info
+    if (fs.existsSync(deepState)) {
+      const ds = JSON.parse(fs.readFileSync(deepState, 'utf8'));
+      if (ds.mode === 'mode1') return 'mode1';
+      if (ds.mode === 'mode2') return 'normal';
+    }
     if (fs.existsSync(mode1State)) return 'mode1';
     if (fs.existsSync(walletsFile)) {
       const data = JSON.parse(fs.readFileSync(walletsFile, 'utf8'));
-      // wallets.json from Mode 1 is an array with wallet_address field
       if (Array.isArray(data) && data.length > 0 && data[0].wallet_address) return 'mode1';
     }
   } catch (e) {}
@@ -532,43 +543,85 @@ app.post('/api/config', async (req, res) => {
 
 // API: Get wallets (on-demand filtering from in-memory traders data)
 let lastTradersReload = 0;
-const WALLETS_FILE = path.join(DATA_DIR, 'wallets.json');
 
 // Get filtered results for either mode
 function getFilteredResults(config) {
-  if (lastScanMode === 'mode1') {
-    if (!fs.existsSync(WALLETS_FILE)) return [];
-    const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
-    const filters = {
-      minTxs: config.minTxs ?? 10,
-      minWinrate: config.minWinrate ?? 0.4,
-      minRoi: config.minRoi ?? 0.5,
-      minProfit: config.minProfit ?? 10,
-      minWalletAge: config.minWalletAge ?? 0,
-    };
-    return wallets
-      .map(w => ({
-        address: w.wallet_address,
-        totalTxs: w.txs || 0,
-        totalSpent: w.spent || 0,
-        totalReceived: w.received || 0,
-        totalProfit: w.pnl_sol || 0,
-        roi: (w.roi_pct || 0) / 100,
-        winrate: (w.winrate || 0) / 100,
-        walletAgeDays: w.wallet_age_days || 0,
-        balance: w.sol_balance || 0,
-      }))
-      .filter(w =>
-        w.totalTxs >= filters.minTxs &&
-        w.roi >= filters.minRoi &&
-        w.winrate >= filters.minWinrate &&
-        w.totalProfit >= filters.minProfit &&
-        w.walletAgeDays >= filters.minWalletAge
-      )
-      .sort((a, b) => b.totalProfit - a.totalProfit);
+  // Check if deep analysis results exist (used by both Mode 1 and Mode 2 after deep analysis)
+  if (fs.existsSync(WALLETS_FILE)) {
+    try {
+      const wallets = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
+      if (Array.isArray(wallets) && wallets.length > 0 && wallets[0].wallet_address) {
+        const filters = {
+          minTxs: config.minTxs ?? 10,
+          minWinrate: config.minWinrate ?? 0.4,
+          minProfit: config.minProfit ?? 10,
+          minWalletAge: config.minWalletAge ?? 0,
+        };
+
+        // Detect new deep-analysis format vs legacy format
+        const isDeepFormat = 'total_pnl_sol' in wallets[0];
+
+        if (isDeepFormat) {
+          return wallets
+            .map(w => ({
+              address: w.wallet_address,
+              totalTxs: w.total_trades || 0,
+              totalCost: w.total_cost_sol || 0,
+              totalRevenue: w.total_revenue_sol || 0,
+              realizedPnl: w.realized_pnl_sol || 0,
+              unrealizedPnl: w.unrealized_pnl_sol || 0,
+              totalProfit: w.total_pnl_sol || 0,
+              tokensTraded: w.tokens_traded || 0,
+              winrate: w.winrate || 0,
+              wins: w.wins || 0,
+              losses: w.losses || 0,
+              openPositions: w.open_positions || 0,
+              walletAgeDays: w.wallet_age_days || 0,
+              balance: w.sol_balance || 0,
+            }))
+            .filter(w =>
+              w.totalTxs >= filters.minTxs &&
+              w.winrate >= filters.minWinrate &&
+              w.totalProfit >= filters.minProfit &&
+              w.walletAgeDays >= filters.minWalletAge
+            )
+            .sort((a, b) => b.totalProfit - a.totalProfit);
+        }
+
+        // Legacy format (from old analyze-wallets-v2.js)
+        return wallets
+          .map(w => ({
+            address: w.wallet_address,
+            totalTxs: w.txs || 0,
+            totalCost: w.spent || 0,
+            totalRevenue: w.received || 0,
+            realizedPnl: w.pnl_sol || 0,
+            unrealizedPnl: 0,
+            totalProfit: w.pnl_sol || 0,
+            tokensTraded: 0,
+            winrate: (w.winrate || 0) / 100,
+            wins: 0,
+            losses: 0,
+            openPositions: 0,
+            walletAgeDays: w.wallet_age_days || 0,
+            balance: w.sol_balance || 0,
+          }))
+          .filter(w =>
+            w.totalTxs >= filters.minTxs &&
+            w.winrate >= filters.minWinrate &&
+            w.totalProfit >= filters.minProfit &&
+            w.walletAgeDays >= filters.minWalletAge
+          )
+          .sort((a, b) => b.totalProfit - a.totalProfit);
+      }
+    } catch (e) { /* fall through to Mode 2 rough data */ }
   }
-  // Mode 2: filter from in-memory trader data
-  return filterTraders(config);
+
+  // Mode 2 rough data (before deep analysis completes)
+  if (lastScanMode !== 'mode1') {
+    return filterTraders(config);
+  }
+  return [];
 }
 
 app.get('/api/wallets', (req, res) => {
@@ -592,14 +645,23 @@ app.get('/api/wallets', (req, res) => {
 app.get('/api/progress', (req, res) => {
   try {
     const progress = {
-      isRunning: scannerProcess !== null,
+      isRunning: scannerProcess !== null || deepAnalyzeProcess !== null,
+      isDeepAnalyzing: deepAnalyzeProcess !== null,
       scanMode: lastScanMode,
       webhookActive: webhookState.status === 'active',
       data: {}
     };
 
+    // Read scanner progress (phase 1)
     if (fs.existsSync(PROGRESS_FILE)) {
       progress.data = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
+    }
+
+    // Read deep analysis progress (phase 2)
+    if (fs.existsSync(DEEP_PROGRESS_FILE)) {
+      try {
+        progress.deepData = JSON.parse(fs.readFileSync(DEEP_PROGRESS_FILE, 'utf8'));
+      } catch (e) {}
     }
 
     // Add webhook stats to progress
@@ -615,9 +677,9 @@ app.get('/api/progress', (req, res) => {
     progress.dataNewestTimeFormatted = newestTime ? new Date(newestTime * 1000).toISOString() : null;
     progress.totalTraders = Object.keys(tradersData).length;
 
-    // Check for resumable Mode 1 analysis
+    // Check for resumable Mode 1 analysis (legacy)
     const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
-    if (!scannerProcess && fs.existsSync(mode1StateFile)) {
+    if (!scannerProcess && !deepAnalyzeProcess && fs.existsSync(mode1StateFile)) {
       try {
         const m1state = JSON.parse(fs.readFileSync(mode1StateFile, 'utf8'));
         if (m1state.status === 'running') {
@@ -630,7 +692,25 @@ app.get('/api/progress', (req, res) => {
             elapsedMs: m1state.elapsedMs || 0,
           };
         }
-      } catch (e) { /* ignore corrupt state file */ }
+      } catch (e) {}
+    }
+
+    // Check for resumable deep analysis
+    if (!scannerProcess && !deepAnalyzeProcess && fs.existsSync(DEEP_STATE_FILE)) {
+      try {
+        const dState = JSON.parse(fs.readFileSync(DEEP_STATE_FILE, 'utf8'));
+        if (dState.status === 'running') {
+          progress.deepResumable = true;
+          progress.deepResumeInfo = {
+            total: dState.wallets.length,
+            completed: dState.nextIndex,
+            remaining: dState.wallets.length - dState.nextIndex,
+            totalCredits: dState.totalCredits || 0,
+            elapsedMs: dState.elapsedMs || 0,
+            mode: dState.mode || 'unknown',
+          };
+        }
+      } catch (e) {}
     }
 
     res.json(progress);
@@ -707,14 +787,40 @@ app.post('/api/scan/start', async (req, res) => {
       loadScanMetadata();
 
       if (code === 0) {
-        if (webhookActiveAtStart) {
-          // Webhook was active: merge scanner data + webhook accumulated data
-          mergeScannedTraders();
-          console.log('Scan complete. Webhook data merged. Real-time monitoring continues.');
-        } else {
-          // No webhook: just load scanner data, no merge needed
-          mergeScannedTraders();
-          console.log('Scan complete. No webhook — scan-only mode finished.');
+        mergeScannedTraders();
+        console.log('Scan complete. Starting deep analysis on filtered wallets...');
+
+        // Auto-chain: spawn deep analysis on filtered candidates
+        try {
+          const cfg = loadConfig();
+          const candidates = filterTraders(cfg);
+          if (candidates.length > 0) {
+            const candidateAddresses = candidates.map(c => c.address);
+            console.log(`Found ${candidateAddresses.length} candidate wallets for deep analysis`);
+
+            // Save candidate wallets for deep-analyze.js
+            fs.writeFileSync(USER_WALLETS_FILE, JSON.stringify(candidateAddresses, null, 2));
+
+            // Clear previous deep state
+            if (fs.existsSync(DEEP_STATE_FILE)) fs.unlinkSync(DEEP_STATE_FILE);
+
+            lastScanMode = 'normal';
+            deepAnalyzeProcess = spawn('node', [path.join(__dirname, 'scripts', 'deep-analyze.js')], {
+              cwd: __dirname,
+              env: { ...process.env, DEEP_MODE: 'mode2' },
+            });
+
+            deepAnalyzeProcess.stdout.on('data', (data) => console.log(`DeepAnalyzer: ${data}`));
+            deepAnalyzeProcess.stderr.on('data', (data) => console.error(`DeepAnalyzer error: ${data}`));
+            deepAnalyzeProcess.on('close', (deepCode) => {
+              console.log(`Deep analyzer exited with code ${deepCode}`);
+              deepAnalyzeProcess = null;
+            });
+          } else {
+            console.log('No wallets passed filter criteria — skipping deep analysis');
+          }
+        } catch (e) {
+          console.error('Failed to start deep analysis:', e.message);
         }
       } else {
         // Write error status
@@ -754,6 +860,11 @@ app.post('/api/scan/stop', async (req, res) => {
     if (scannerProcess) {
       scannerProcess.kill('SIGTERM');
       scannerProcess = null;
+    }
+
+    if (deepAnalyzeProcess) {
+      deepAnalyzeProcess.kill('SIGTERM');
+      deepAnalyzeProcess = null;
     }
 
     if (shouldStopWebhook && webhookState.webhookId) {
@@ -887,7 +998,8 @@ app.get('/api/status', (req, res) => {
       lastUpdate: new Date().toISOString(),
       walletCount: results.length,
       totalTraders: Object.keys(tradersData).length,
-      isScanning: scannerProcess !== null,
+      isScanning: scannerProcess !== null || deepAnalyzeProcess !== null,
+      isDeepAnalyzing: deepAnalyzeProcess !== null,
       webhookActive: webhookState.status === 'active',
     });
   } catch (e) {
@@ -938,9 +1050,9 @@ app.get('/api/download/filtered', (req, res) => {
     res.setHeader('Content-Type', 'text/csv');
 
     if (req.query.mode === 'detailed') {
-      const header = 'Address,Total Trades,Winrate,ROI,Total Profit (SOL),Total Spent (SOL),Total Received (SOL),Wallet Age (days)';
+      const header = 'Address,Total Trades,Winrate,Realized PnL (SOL),Unrealized PnL (SOL),Total PnL (SOL),Tokens Traded,Cost (SOL),Revenue (SOL),Wallet Age (days),SOL Balance';
       const rows = results.map(w =>
-        `${w.address},${w.totalTxs},${(w.winrate * 100).toFixed(1)}%,${(w.roi * 100).toFixed(1)}%,${w.totalProfit.toFixed(4)},${w.totalSpent.toFixed(4)},${w.totalReceived.toFixed(4)},${w.walletAgeDays}`
+        `${w.address},${w.totalTxs},${(w.winrate * 100).toFixed(1)}%,${(w.realizedPnl || 0).toFixed(4)},${(w.unrealizedPnl || 0).toFixed(4)},${w.totalProfit.toFixed(4)},${w.tokensTraded || 0},${(w.totalCost || 0).toFixed(4)},${(w.totalRevenue || 0).toFixed(4)},${w.walletAgeDays},${(w.balance || 0).toFixed(4)}`
       );
       res.setHeader('Content-Disposition', 'attachment; filename=wallets-detailed.csv');
       res.send(header + '\n' + rows.join('\n'));
@@ -973,37 +1085,36 @@ app.post('/api/analyze/wallets', async (req, res) => {
     }
 
     // Mode 1 does not need webhook — delete ALL webhooks at Helius to save credits
-    // Queries Helius API directly, so it catches webhooks from any source (VPS, dashboard, etc.)
     await deleteAllWebhooks(config);
 
     // Clear any previous checkpoint and results (fresh start)
     const mode1StateFile = path.join(DATA_DIR, 'mode1-state.json');
     if (fs.existsSync(mode1StateFile)) fs.unlinkSync(mode1StateFile);
+    if (fs.existsSync(DEEP_STATE_FILE)) fs.unlinkSync(DEEP_STATE_FILE);
     if (fs.existsSync(WALLETS_FILE)) fs.unlinkSync(WALLETS_FILE);
 
     // Save wallet list for the analyzer script
-    const userWalletsFile = path.join(DATA_DIR, 'user-wallets.json');
-    fs.writeFileSync(userWalletsFile, JSON.stringify(walletList, null, 2));
+    fs.writeFileSync(USER_WALLETS_FILE, JSON.stringify(walletList, null, 2));
 
     lastScanMode = 'mode1';
 
-    // Start the enhanced analyzer with user wallets
-    scannerProcess = spawn('node', ['scripts/analyze-wallets-v2.js'], {
+    // Start deep analyzer with user wallets
+    deepAnalyzeProcess = spawn('node', [path.join(__dirname, 'scripts', 'deep-analyze.js')], {
       cwd: __dirname,
-      env: { ...process.env, HELIUS_API_KEY: config.heliusApiKey }
+      env: { ...process.env, DEEP_MODE: 'mode1' },
     });
 
-    scannerProcess.stdout.on('data', (data) => {
-      console.log(`Analyzer: ${data}`);
+    deepAnalyzeProcess.stdout.on('data', (data) => {
+      console.log(`DeepAnalyzer: ${data}`);
     });
 
-    scannerProcess.stderr.on('data', (data) => {
-      console.error(`Analyzer error: ${data}`);
+    deepAnalyzeProcess.stderr.on('data', (data) => {
+      console.error(`DeepAnalyzer error: ${data}`);
     });
 
-    scannerProcess.on('close', (code) => {
-      console.log(`Analyzer exited with code ${code}`);
-      scannerProcess = null;
+    deepAnalyzeProcess.on('close', (code) => {
+      console.log(`Deep analyzer exited with code ${code}`);
+      deepAnalyzeProcess = null;
     });
 
     res.json({
@@ -1080,6 +1191,71 @@ app.post('/api/analyze/resume', async (req, res) => {
       success: true,
       message: `Resuming analysis: ${remaining} wallets remaining (${state.nextIndex} already done)`
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Resume deep analysis
+app.post('/api/analyze/deep-resume', async (req, res) => {
+  try {
+    if (scannerProcess || deepAnalyzeProcess) {
+      return res.status(400).json({ error: 'Analysis already running' });
+    }
+
+    if (!fs.existsSync(DEEP_STATE_FILE)) {
+      return res.status(400).json({ error: 'No interrupted deep analysis to resume' });
+    }
+
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(DEEP_STATE_FILE, 'utf8'));
+    } catch (e) {
+      fs.unlinkSync(DEEP_STATE_FILE);
+      return res.status(400).json({ error: 'Checkpoint file corrupted. Please start a new analysis.' });
+    }
+
+    if (state.status !== 'running') {
+      return res.status(400).json({ error: 'No interrupted deep analysis to resume' });
+    }
+
+    const config = loadConfig();
+    if (!config.heliusApiKey) {
+      return res.status(400).json({ error: 'Helius API key not configured' });
+    }
+
+    await deleteAllWebhooks(config);
+
+    lastScanMode = state.mode === 'mode1' ? 'mode1' : 'normal';
+
+    deepAnalyzeProcess = spawn('node', [path.join(__dirname, 'scripts', 'deep-analyze.js')], {
+      cwd: __dirname,
+      env: { ...process.env, DEEP_MODE: state.mode || 'mode1' },
+    });
+
+    deepAnalyzeProcess.stdout.on('data', (data) => console.log(`DeepAnalyzer: ${data}`));
+    deepAnalyzeProcess.stderr.on('data', (data) => console.error(`DeepAnalyzer error: ${data}`));
+    deepAnalyzeProcess.on('close', (code) => {
+      console.log(`Deep analyzer exited with code ${code}`);
+      deepAnalyzeProcess = null;
+    });
+
+    const remaining = state.wallets.length - state.nextIndex;
+    res.json({
+      success: true,
+      message: `Resuming deep analysis: ${remaining} wallets remaining (${state.nextIndex} already done)`
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Discard deep analysis checkpoint
+app.post('/api/analyze/deep-discard', (req, res) => {
+  try {
+    if (fs.existsSync(DEEP_STATE_FILE)) fs.unlinkSync(DEEP_STATE_FILE);
+    if (fs.existsSync(DEEP_PROGRESS_FILE)) fs.unlinkSync(DEEP_PROGRESS_FILE);
+    res.json({ success: true, message: 'Deep analysis checkpoint discarded' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

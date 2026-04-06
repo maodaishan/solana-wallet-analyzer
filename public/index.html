@@ -202,12 +202,12 @@
             <div class="stat-label">Profitable</div>
           </div>
           <div class="stat-item">
-            <div class="stat-value" id="avg-roi">0%</div>
-            <div class="stat-label">Average ROI</div>
-          </div>
-          <div class="stat-item">
             <div class="stat-value" id="avg-winrate">0%</div>
             <div class="stat-label">Average Winrate</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="avg-pnl">0</div>
+            <div class="stat-label">Avg Total P&L</div>
           </div>
         </div>
         
@@ -225,11 +225,12 @@
             <thead>
               <tr>
                 <th>Wallet Address</th>
-                <th>Total Trades</th>
+                <th>Trades</th>
                 <th>Winrate</th>
-                <th>Avg ROI</th>
-                <th>Total Profit</th>
-                <th>Avg Hold (days)</th>
+                <th>Realized P&L</th>
+                <th>Unrealized P&L</th>
+                <th>Total P&L</th>
+                <th>Tokens</th>
                 <th>Balance (SOL)</th>
               </tr>
             </thead>
@@ -732,6 +733,28 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       }
     }
 
+    async function resumeDeepAnalysis() {
+      try {
+        const res = await fetch('/api/analyze/deep-resume', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          alert(data.error || 'Server error');
+          return;
+        }
+        showProgressStep('🔬 Resuming Deep Analysis', 1);
+        startProgressPolling();
+      } catch (e) {
+        alert('Failed to resume: ' + e.message);
+      }
+    }
+
+    async function discardDeepCheckpoint() {
+      try {
+        await fetch('/api/analyze/deep-discard', { method: 'POST' });
+      } catch (e) { /* ignore */ }
+      location.reload();
+    }
+
     function updateScannerDisplay() {
       fetch("/api/config")
         .then(res => res.json())
@@ -856,8 +879,10 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         }
         loadWallets();
 
-      } else if (data.status === "analyzing") {
-        // Mode 1: Per-wallet analysis progress
+      } else if (data.status === "analyzing" || data.status === "deep-analyzing" || (progressData.deepData && progressData.deepData.status === "deep-analyzing")) {
+        // Deep analysis / Mode 1 per-wallet progress
+        const deepD = progressData.deepData || data;
+        if (deepD.status === "deep-analyzing") Object.assign(data, deepD);
         const processed = data.processed || 0;
         const total = data.total || 0;
         const traders = data.traders || 0;
@@ -1167,35 +1192,40 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
       const tbody = document.getElementById('wallets-list');
       const totalCount = document.getElementById('total-wallets');
       const profitableCount = document.getElementById('profitable-count');
-      const avgRoi = document.getElementById('avg-roi');
       const avgWinrate = document.getElementById('avg-winrate');
-      
+      const avgPnl = document.getElementById('avg-pnl');
+
       // Update stats
       totalCount.textContent = wallets.length;
       const profitable = wallets.filter(w => w.totalProfit > 0);
       profitableCount.textContent = profitable.length;
-      
+
       if (wallets.length > 0) {
-        const totalRoi = wallets.reduce((sum, w) => sum + (w.roi || w.avgRoi || 0), 0);
         const totalWinrate = wallets.reduce((sum, w) => sum + w.winrate, 0);
-        avgRoi.textContent = (totalRoi / wallets.length).toFixed(1) + '%';
+        const totalPnl = wallets.reduce((sum, w) => sum + w.totalProfit, 0);
         avgWinrate.textContent = (totalWinrate / wallets.length * 100).toFixed(1) + '%';
+        avgPnl.textContent = (totalPnl / wallets.length).toFixed(2) + ' SOL';
       }
-      
+
       // Display wallets
-      tbody.innerHTML = wallets.map(wallet => `
+      tbody.innerHTML = wallets.map(wallet => {
+        const realized = wallet.realizedPnl || 0;
+        const unrealized = wallet.unrealizedPnl || 0;
+        const total = wallet.totalProfit || 0;
+        return `
         <tr>
           <td style="font-family: monospace; font-size: 0.85rem;">
             ${wallet.address.slice(0, 8)}...${wallet.address.slice(-4)}
           </td>
           <td>${wallet.totalTxs}</td>
           <td>${(wallet.winrate * 100).toFixed(1)}%</td>
-          <td class="${(wallet.roi || wallet.avgRoi || 0) > 0 ? 'profit' : 'loss'}">${((wallet.roi || wallet.avgRoi || 0) * 100).toFixed(1)}%</td>
-          <td class="${wallet.totalProfit > 0 ? 'profit' : 'loss'}">$${wallet.totalProfit.toFixed(2)}</td>
-          <td>${(wallet.walletAgeDays || 0).toFixed(1)}</td>
-          <td>${wallet.balance.toFixed(2)}</td>
-        </tr>
-      `).join('');
+          <td class="${realized > 0 ? 'profit' : 'loss'}">${realized.toFixed(2)} SOL</td>
+          <td class="${unrealized > 0 ? 'profit' : 'loss'}">${unrealized.toFixed(2)} SOL</td>
+          <td class="${total > 0 ? 'profit' : 'loss'}">${total.toFixed(2)} SOL</td>
+          <td>${wallet.tokensTraded || 0}</td>
+          <td>${(wallet.balance || 0).toFixed(2)}</td>
+        </tr>`;
+      }).join('');
     }
 
     // Config management
@@ -1347,8 +1377,39 @@ function switchTab(tabName, clickedElement) {      document.querySelectorAll('.t
         const title = isMode1 ? '📋 Analyzing Specified Wallets' : '🔍 Blockchain Discovery in Progress';
         showProgressStep(title, isMode1 ? 1 : 2);
         startProgressPolling();
+      } else if (data.deepResumable) {
+        // Interrupted deep analysis — show resume prompt
+        const info = data.deepResumeInfo;
+        switchTab('scanner', document.querySelectorAll('.tab')[1]);
+        document.getElementById('step-mode-selection').classList.add('hidden');
+        document.getElementById('step-progress').classList.remove('hidden');
+        document.getElementById('progress-mode-title').textContent = '⏸ Deep Analysis Interrupted';
+        const display = document.getElementById('progress-display');
+        const pct = Math.round(info.completed / info.total * 100);
+        display.innerHTML = `
+          <div style="text-align: center; padding: 30px;">
+            <div style="font-size: 48px; margin-bottom: 15px;">⏸</div>
+            <div style="color: #ffa500; font-size: 18px; margin-bottom: 10px;">Deep Analysis Was Interrupted</div>
+            <div style="color: #888; margin-bottom: 8px;">
+              ${info.completed} / ${info.total} wallets completed (${pct}%)
+            </div>
+            <div style="background: #333; border-radius: 10px; overflow: hidden; height: 10px; max-width: 400px; margin: 0 auto 20px;">
+              <div style="background: linear-gradient(90deg, #9945FF, #ffa500); height: 100%; width: ${pct}%;"></div>
+            </div>
+            <div style="color: #666; font-size: 0.85rem; margin-bottom: 20px;">
+              ${info.remaining} wallets remaining | ~${(info.totalCredits || 0).toLocaleString()} credits used so far
+            </div>
+            <div style="display: flex; gap: 12px; justify-content: center;">
+              <button onclick="resumeDeepAnalysis()" style="background: #14F195; color: #000; border: none; padding: 12px 28px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer;">
+                ▶ Resume Analysis
+              </button>
+              <button onclick="discardDeepCheckpoint()" style="background: #333; color: #ccc; border: 1px solid #555; padding: 12px 20px; border-radius: 8px; font-size: 14px; cursor: pointer;">
+                Discard &amp; Start Over
+              </button>
+            </div>
+          </div>`;
       } else if (data.mode1Resumable) {
-        // Interrupted Mode 1 analysis — show resume prompt
+        // Interrupted legacy Mode 1 analysis — show resume prompt
         const info = data.mode1ResumeInfo;
         switchTab('scanner', document.querySelectorAll('.tab')[1]);
         document.getElementById('step-mode-selection').classList.add('hidden');
