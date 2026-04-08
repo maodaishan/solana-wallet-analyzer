@@ -229,8 +229,17 @@ function extractTokenChanges(tx, walletAddress) {
 }
 
 // ============================================================
-// P&L Engine (Average Cost Basis)
+// P&L Engine (Average Cost Basis with Transfer Separation)
+//
+// Tracks "bought" (SOL-acquired) and "transferred-in" quantities
+// separately. Only bought tokens contribute to P&L. When selling
+// or transferring out, the bought/transferred split is proportional
+// to current holdings.
 // ============================================================
+
+// Minimum SOL movement to classify as trade (vs transfer).
+// Covers tx fee (~0.000005) + token account rent (~0.002) + priority fee.
+const TRANSFER_THRESHOLD = 0.005;
 
 function buildPositions(txRecords) {
   const positions = {};
@@ -238,9 +247,17 @@ function buildPositions(txRecords) {
   function ensurePos(mint, blockTime) {
     if (!positions[mint]) {
       positions[mint] = {
-        totalCostSol: 0, totalBought: 0,
-        totalRevenueSol: 0, totalSold: 0,
-        realized_pnl: 0, buys: 0, sells: 0,
+        // Running balances (decremented on sell / transfer-out)
+        boughtQty: 0,          // remaining tokens acquired via buy
+        boughtCostSol: 0,      // remaining cost of boughtQty
+        transferredInQty: 0,   // remaining tokens from transfers
+        // Cumulative stats
+        totalBoughtCost: 0,    // total SOL ever spent buying this token
+        totalRevenueSol: 0,    // revenue from selling bought portion
+        totalSold: 0,          // all tokens sold (for reference)
+        realized_pnl: 0,
+        buys: 0, sells: 0,
+        transfersIn: 0, transfersOut: 0,
         firstSeen: blockTime, lastSeen: blockTime,
       };
     }
@@ -248,64 +265,157 @@ function buildPositions(txRecords) {
     return positions[mint];
   }
 
+  // Helper: get the bought ratio for proportional split
+  function boughtRatio(pos) {
+    const total = pos.boughtQty + pos.transferredInQty;
+    return total > 0 ? pos.boughtQty / total : 0;
+  }
+
+  // Helper: process a sell — proportionally split bought vs transferred
+  function processSell(pos, tokensSold, revenueSol) {
+    const ratio = boughtRatio(pos);
+    const boughtSold = tokensSold * ratio;
+    const transferredSold = tokensSold - boughtSold;
+
+    // P&L only for bought portion
+    const avgCost = pos.boughtQty > 0 ? pos.boughtCostSol / pos.boughtQty : 0;
+    const costBasis = avgCost * boughtSold;
+    const boughtRevenue = revenueSol * ratio;
+    pos.realized_pnl += boughtRevenue - costBasis;
+    pos.totalRevenueSol += boughtRevenue;
+
+    // Reduce running balances
+    pos.boughtCostSol = Math.max(0, pos.boughtCostSol - avgCost * boughtSold);
+    pos.boughtQty = Math.max(0, pos.boughtQty - boughtSold);
+    pos.transferredInQty = Math.max(0, pos.transferredInQty - transferredSold);
+    pos.totalSold += tokensSold;
+    pos.sells++;
+  }
+
+  // Helper: process a transfer-out — proportionally reduce position, no P&L
+  function processTransferOut(pos, tokensSent) {
+    const ratio = boughtRatio(pos);
+    const boughtOut = tokensSent * ratio;
+    const transferredOut = tokensSent - boughtOut;
+
+    const avgCost = pos.boughtQty > 0 ? pos.boughtCostSol / pos.boughtQty : 0;
+    pos.boughtCostSol = Math.max(0, pos.boughtCostSol - avgCost * boughtOut);
+    pos.boughtQty = Math.max(0, pos.boughtQty - boughtOut);
+    pos.transferredInQty = Math.max(0, pos.transferredInQty - transferredOut);
+    pos.transfersOut++;
+  }
+
   for (const record of txRecords) {
     const { blockTime, solChange, tokenChanges } = record;
     if (tokenChanges.length === 0) continue;
 
-    // CASE 1: Single token change + SOL change → simple buy or sell
+    // CASE 1: Single token change + SOL change → buy, sell, or transfer
     if (tokenChanges.length === 1) {
       const { mint, delta } = tokenChanges[0];
       const pos = ensurePos(mint, blockTime);
 
       if (delta > 0) {
-        // BUY: received tokens, spent SOL
-        const costSol = Math.max(0, Math.abs(solChange));
-        pos.totalCostSol += costSol;
-        pos.totalBought += delta;
-        pos.buys++;
+        if (solChange < -TRANSFER_THRESHOLD) {
+          // BUY: received tokens, spent SOL
+          const costSol = Math.abs(solChange);
+          pos.boughtQty += delta;
+          pos.boughtCostSol += costSol;
+          pos.totalBoughtCost += costSol;
+          pos.buys++;
+        } else {
+          // TRANSFER IN: received tokens without spending SOL
+          pos.transferredInQty += delta;
+          pos.transfersIn++;
+        }
       } else {
-        // SELL: sent tokens, received SOL
-        const revenueSol = Math.max(0, solChange);
-        const tokensSold = Math.abs(delta);
-
-        // Realized P&L using average cost basis
-        const avgCost = pos.totalBought > 0 ? pos.totalCostSol / pos.totalBought : 0;
-        const costBasis = avgCost * tokensSold;
-        pos.realized_pnl += revenueSol - costBasis;
-
-        pos.totalRevenueSol += revenueSol;
-        pos.totalSold += tokensSold;
-        pos.sells++;
+        const tokensSent = Math.abs(delta);
+        if (solChange > TRANSFER_THRESHOLD) {
+          // SELL: sent tokens, received SOL
+          processSell(pos, tokensSent, solChange);
+        } else {
+          // TRANSFER OUT: sent tokens without receiving SOL
+          processTransferOut(pos, tokensSent);
+        }
       }
     }
 
-    // CASE 2: Multiple token changes → token-to-token swap
+    // CASE 2: Multiple token changes → swap or multi-transfer
     else if (tokenChanges.length >= 2) {
       const sent = tokenChanges.filter(tc => tc.delta < 0);
       const received = tokenChanges.filter(tc => tc.delta > 0);
 
-      // Calculate implied SOL value from sent tokens
+      // All received, none sent → multi transfer-in
+      if (sent.length === 0) {
+        for (const { mint, delta } of received) {
+          const pos = ensurePos(mint, blockTime);
+          pos.transferredInQty += delta;
+          pos.transfersIn++;
+        }
+        continue;
+      }
+
+      // All sent, none received → multi-sell or multi transfer-out
+      if (received.length === 0) {
+        if (solChange > TRANSFER_THRESHOLD) {
+          // Multi-sell: distribute SOL revenue by cost-basis weight
+          let totalCostBasis = 0;
+          const sentInfo = sent.map(({ mint, delta }) => {
+            const tokensSold = Math.abs(delta);
+            const pos = ensurePos(mint, blockTime);
+            const ratio = boughtRatio(pos);
+            const avgCost = pos.boughtQty > 0 ? pos.boughtCostSol / pos.boughtQty : 0;
+            const costBasis = avgCost * tokensSold * ratio;
+            totalCostBasis += costBasis;
+            return { mint, tokensSold, pos, costBasis, ratio };
+          });
+          for (const { tokensSold, pos, costBasis, ratio } of sentInfo) {
+            const share = totalCostBasis > 0 ? costBasis / totalCostBasis : 1 / sentInfo.length;
+            processSell(pos, tokensSold, solChange * share);
+          }
+        } else {
+          // Multi transfer-out
+          for (const { mint, delta } of sent) {
+            processTransferOut(ensurePos(mint, blockTime), Math.abs(delta));
+          }
+        }
+        continue;
+      }
+
+      // Token-to-token swap: both sent and received tokens present
+      // Only the bought portion of sent tokens contributes cost to received tokens
       let impliedSolValue = 0;
       for (const { mint, delta } of sent) {
         const tokensSold = Math.abs(delta);
         const pos = ensurePos(mint, blockTime);
-        const avgCost = pos.totalBought > 0 ? pos.totalCostSol / pos.totalBought : 0;
-        impliedSolValue += avgCost * tokensSold;
+        const ratio = boughtRatio(pos);
+        const boughtSold = tokensSold * ratio;
+        const transferredSold = tokensSold - boughtSold;
 
-        const costBasis = avgCost * tokensSold;
+        const avgCost = pos.boughtQty > 0 ? pos.boughtCostSol / pos.boughtQty : 0;
+        const costBasis = avgCost * boughtSold;
+        impliedSolValue += costBasis;
+
+        // Realize loss on bought portion only
         pos.realized_pnl += 0 - costBasis;
+
+        // Reduce running balances
+        pos.boughtCostSol = Math.max(0, pos.boughtCostSol - avgCost * boughtSold);
+        pos.boughtQty = Math.max(0, pos.boughtQty - boughtSold);
+        pos.transferredInQty = Math.max(0, pos.transferredInQty - transferredSold);
         pos.totalSold += tokensSold;
         pos.sells++;
       }
 
-      // Assign implied cost to received tokens
+      // Received tokens from swap are treated as "bought" (acquired via trade)
       const totalReceivedCount = received.length || 1;
       for (const { mint, delta } of received) {
         const pos = ensurePos(mint, blockTime);
         const share = impliedSolValue / totalReceivedCount;
         const extraSolCost = Math.abs(Math.min(0, solChange)) / totalReceivedCount;
-        pos.totalCostSol += share + extraSolCost;
-        pos.totalBought += delta;
+        const cost = share + extraSolCost;
+        pos.boughtQty += delta;
+        pos.boughtCostSol += cost;
+        pos.totalBoughtCost += cost;
         pos.buys++;
       }
     }
@@ -373,50 +483,64 @@ function calculateWalletSummary(positions, holdings, prices, solBalance, solUsdP
   let wins = 0;
   let losses = 0;
   let openPositions = 0;
+  let totalTransfersIn = 0;
+  let totalTransfersOut = 0;
   const tokenDetails = {};
 
   for (const [mint, pos] of Object.entries(positions)) {
     realized_pnl += pos.realized_pnl;
-    totalCost += pos.totalCostSol;
+    totalCost += pos.totalBoughtCost;
     totalRevenue += pos.totalRevenueSol;
     totalTrades += pos.buys + pos.sells;
+    totalTransfersIn += pos.transfersIn || 0;
+    totalTransfersOut += pos.transfersOut || 0;
 
+    // Compute holdings: bought + transferred remaining
+    const computedTotal = pos.boughtQty + pos.transferredInQty;
     const holdingAmount = holdings[mint] || 0;
-    const computedHolding = Math.max(0, pos.totalBought - pos.totalSold);
-    const effectiveHolding = holdingAmount > 0 ? holdingAmount : computedHolding;
+    const effectiveHolding = holdingAmount > 0 ? holdingAmount : computedTotal;
+
+    // Only bought portion has unrealized P&L
+    const boughtRatio = computedTotal > 0 ? pos.boughtQty / computedTotal : 0;
+    const boughtHolding = effectiveHolding * boughtRatio;
 
     let currentValueSol = 0;
     let tokenUnrealizedPnl = 0;
 
-    if (effectiveHolding > 0) {
+    if (boughtHolding > 1e-6) {
       if (prices[mint] && solUsdPrice > 0) {
-        const valueSol = (prices[mint] * effectiveHolding) / solUsdPrice;
+        const valueSol = (prices[mint] * boughtHolding) / solUsdPrice;
         currentValueSol = valueSol;
-        const avgCost = pos.totalBought > 0 ? pos.totalCostSol / pos.totalBought : 0;
-        const costBasis = avgCost * effectiveHolding;
+        const avgCost = pos.boughtQty > 0 ? pos.boughtCostSol / pos.boughtQty : 0;
+        const costBasis = avgCost * boughtHolding;
         tokenUnrealizedPnl = valueSol - costBasis;
         unrealized_pnl += tokenUnrealizedPnl;
       }
       openPositions++;
     }
 
-    // Win/loss: only for closed positions (fully sold)
-    if (pos.totalSold > 0 && effectiveHolding < 1e-6) {
+    // Win/loss: only for tokens that had buys and are fully closed
+    const posFullyClosed = effectiveHolding < 1e-6;
+    if (pos.sells > 0 && pos.buys > 0 && posFullyClosed) {
       if (pos.realized_pnl > 0) wins++;
       else losses++;
     }
 
     tokenDetails[mint] = {
-      cost_sol: parseFloat(pos.totalCostSol.toFixed(6)),
+      cost_sol: parseFloat(pos.totalBoughtCost.toFixed(6)),
       revenue_sol: parseFloat(pos.totalRevenueSol.toFixed(6)),
       realized_pnl: parseFloat(pos.realized_pnl.toFixed(6)),
-      bought: parseFloat(pos.totalBought.toPrecision(8)),
+      bought: parseFloat((pos.boughtQty + pos.transferredInQty).toPrecision(8)),
+      bought_qty: parseFloat(pos.boughtQty.toPrecision(8)),
+      transferred_in_qty: parseFloat(pos.transferredInQty.toPrecision(8)),
       sold: parseFloat(pos.totalSold.toPrecision(8)),
       holding: parseFloat(effectiveHolding.toPrecision(8)),
       current_value_sol: parseFloat(currentValueSol.toFixed(6)),
       unrealized_pnl: parseFloat(tokenUnrealizedPnl.toFixed(6)),
       buys: pos.buys,
       sells: pos.sells,
+      transfers_in: pos.transfersIn || 0,
+      transfers_out: pos.transfersOut || 0,
     };
   }
 
@@ -433,6 +557,8 @@ function calculateWalletSummary(positions, holdings, prices, solBalance, solUsdP
     wins,
     losses,
     open_positions: openPositions,
+    transfers_in: totalTransfersIn,
+    transfers_out: totalTransfersOut,
     sol_balance: parseFloat(solBalance.toFixed(4)),
     tokens: tokenDetails,
   };
@@ -525,7 +651,7 @@ async function analyzeWallet(walletAddress) {
   const heldMints = Object.keys(holdings).filter(m => holdings[m] > 0);
   // Also price tokens in open positions (computed holding > 0)
   for (const [mint, pos] of Object.entries(positions)) {
-    if (pos.totalBought - pos.totalSold > 1e-6 && !heldMints.includes(mint)) {
+    if (pos.boughtQty + pos.transferredInQty > 1e-6 && !heldMints.includes(mint)) {
       heldMints.push(mint);
     }
   }
