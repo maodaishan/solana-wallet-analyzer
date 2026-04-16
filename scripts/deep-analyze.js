@@ -31,7 +31,7 @@ const HELIUS_KEY = config.heliusApiKey;
 const RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 const TARGET_RPS = config.targetRps || 10;
 const CHUNK_SIZE = config.chunkSize || 10;
-const DAYS_TO_SCAN = config.daysToScan || 30;
+const DAYS_TO_SCAN = config.deepAnalysisDays ?? config.daysToScan ?? 30;
 const CUTOFF_TIME = Math.floor(Date.now() / 1000) - DAYS_TO_SCAN * 86400;
 const DEEP_MODE = process.env.DEEP_MODE || 'mode1';
 

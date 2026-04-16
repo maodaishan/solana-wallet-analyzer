@@ -21,7 +21,7 @@ const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
 const HELIUS_KEY = config.heliusApiKey;
 const RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 const PUMPFUN = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
-const DAYS_TO_SCAN = config.daysToScan || 7;
+const DAYS_TO_SCAN = config.mode2ScanDays ?? config.daysToScan ?? 7;
 const DELAY_MS = config.delayMs || 40;
 const TARGET_RPS = config.targetRps || 45; // RPC calls per second
 const CHUNK_SIZE = config.chunkSize || 10; // concurrent RPC calls
